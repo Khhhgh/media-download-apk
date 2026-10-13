@@ -22,26 +22,79 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
+      - name: Generate Dummy google-services.json
+        run: |
+          PKG=$(grep -oP '(?<=namespace = ")[^"]+' app/build.gradle.kts 2>/dev/null || grep -oP '(?<=applicationId = ")[^"]+' app/build.gradle.kts 2>/dev/null || echo "com.example")
+          echo "Detected Package Name: $PKG"
+
+          cat <<EOF > dummy-services.json
+          {
+            "project_info": {
+              "project_number": "123456789012",
+              "project_id": "media-download-app",
+              "storage_bucket": "media-download-app.appspot.com"
+            },
+            "client": [
+              {
+                "client_info": {
+                  "mobilesdk_app_id": "1:123456789012:android:abcdef1234567890",
+                  "android_client_info": {
+                    "package_name": "$PKG"
+                  }
+                },
+                "oauth_client": [],
+                "api_key": [{"current_key": "dummy_api_key"}],
+                "services": {"analytics_service": {"status": 1}}
+              },
+              {
+                "client_info": {
+                  "mobilesdk_app_id": "1:123456789012:android:abcdef1234567891",
+                  "android_client_info": {
+                    "package_name": "com.example"
+                  }
+                },
+                "oauth_client": [],
+                "api_key": [{"current_key": "dummy_api_key"}],
+                "services": {"analytics_service": {"status": 1}}
+              }
+            ],
+            "configuration_version": "1"
+          }
+          EOF
+
+          mkdir -p app/src/debug app/src/main
+          cp dummy-services.json app/google-services.json
+          cp dummy-services.json app/src/debug/google-services.json
+          cp dummy-services.json app/src/main/google-services.json
+
+      - name: Configure Gradle Environment
+        run: |
+          echo "org.gradle.jvmargs=-Xmx3072m -XX:MaxMetaspaceSize=512m -Djava.awt.headless=true" >> gradle.properties
+          echo "android.useAndroidX=true" >> gradle.properties
+
       - name: Build Android APK
         run: |
           if [ ! -f "gradlew" ]; then
             gradle wrapper
           fi
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          ./gradlew assembleDebug -x test -x lint --no-daemon --stacktrace
 
       - name: Send APK to Telegram
         env:
           BOT_TOKEN: "8924731332:AAG3nTlbNLHnAwmDBgJYAAk4TSmonmfVEIU"
           CHAT_ID: "8466040187"
         run: |
-          APK_FILE=$(find . -name "*.apk" -not -path "*/intermediates/*" | head -n 1)
+          APK_FILE=$(find app/build/outputs/apk -name "*.apk" 2>/dev/null | head -n 1)
+          if [ -z "$APK_FILE" ]; then
+            APK_FILE=$(find . -name "*.apk" -not -path "*/intermediates/*" | head -n 1)
+          fi
           echo "Found APK: $APK_FILE"
           
           if [ -z "$APK_FILE" ]; then
             curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
               -d chat_id="${CHAT_ID}" \
-              -d text="❌ حدث خطأ أثناء تجميع الـ APK في خوادم GitHub."
+              -d text="❌ لم يتم العثور على ملف الـ APK بعد انتهاء التجميع."
             exit 1
           fi
 
@@ -52,11 +105,11 @@ jobs:
             curl --connect-timeout 60 --max-time 600 \
                  -F chat_id="${CHAT_ID}" \
                  -F document=@"$APK_FILE" \
-                 -F caption="📱 تطبيق media download - تحميل الميديا جاهز للتثبيت بنجاح!" \
+                 -F caption="📱 تطبيق media download - جاهز للتثبيت بنجاح!" \
                  "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument"
           else
             DOWNLOAD_URL=$(curl -F "file=@$APK_FILE" https://file.io | grep -o '"link":"[^"]*' | cut -d'"' -f4)
             curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
               -d chat_id="${CHAT_ID}" \
-              -d text="✅ تم تجميع التطبيق بنجاح! حجم الملف تجاوز 50MB، رابط التحميل المباشر: $DOWNLOAD_URL"
+              -d text="✅ تم تجميع التطبيق بنجاح! رابط التحميل: $DOWNLOAD_URL"
           fi
