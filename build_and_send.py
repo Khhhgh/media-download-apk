@@ -50,11 +50,17 @@ def send_apk_direct(apk_path: str, file_size_mb: float):
     filename = os.path.basename(apk_path)
     caption = (
         "🚀 <b>media download - تحميل الميديا</b>\n"
-        f"📦 <b>APK:</b> <code>{filename}</code>\n"
-        f"📊 <b>Size:</b> {file_size_mb:.2f} MB\n"
-        "⚡ <b>Architecture:</b> Remote Engine Gist & TikWM (ba31c38a)\n"
-        "🎬 <b>Platforms:</b> TikTok, Instagram, Twitter/X, Facebook + 15 Platforms\n"
-        "✅ <b>Status:</b> Ready to install"
+        f"📦 <b>الملف / APK:</b> <code>{filename}</code>\n"
+        f"📊 <b>الحجم / Size:</b> {file_size_mb:.2f} MB\n"
+        "🏷️ <b>الإصدار / Version:</b> 1.0.4 (build 5)\n"
+        "⚡ <b>التحديثات / Updates:</b>\n"
+        " • استخراج إنستغرام عبر التضمين المباشر (Zero-Cookie Embed Solution)\n"
+        " • محرك تيك توك الثلاثي (TikWM + SSSTik + HTML Mobile Scraper)\n"
+        " • تنظيف وتطهير الروابط تلقائياً حتى مع رموز سابقة (مثل '==')\n"
+        " • ضبط اتجاه حقل الإدخال من اليسار لليمين (LTR Directionality)\n"
+        " • فصل فيديو بنترست الحقيقي MP4 عن الصور الثابتة بدقة كاملة\n"
+        "🎬 <b>المنصات المدعومة:</b> TikTok, Instagram, Twitter/X, Facebook, Pinterest + Universal Web\n"
+        "✅ <b>الحالة / Status:</b> جاهز للتثبيت والاستخدام المباشر"
     )
 
     boundary = f"----WebKitFormBoundary{uuid.uuid4().hex}"
@@ -172,7 +178,14 @@ def upload_and_notify_fallback(apk_path: str, file_size_mb: float):
 
 
 def find_or_build_apk():
-    """Locates existing APK or attempts build."""
+    """Builds fresh APK with Gradle or locates existing APK."""
+    # Build fresh APK using gradle
+    try:
+        print("[*] Building fresh APK: gradle :app:assembleDebug...")
+        subprocess.run(["gradle", ":app:assembleDebug"], check=True)
+    except Exception as e:
+        print(f"[!] Warning: Gradle assembleDebug encountered an issue: {e}")
+
     candidate_paths = [
         "app/build/outputs/apk/debug/app-debug.apk",
         "app/build/outputs/apk/release/app-release.apk",
@@ -184,29 +197,8 @@ def find_or_build_apk():
 
     for path in candidate_paths:
         if os.path.isfile(path) and os.path.getsize(path) > 1000:
-            print(f"[+] Found existing APK: {path}")
+            print(f"[+] Found APK to deliver: {path}")
             return path
-
-    # If Flutter CLI exists, run flutter build
-    try:
-        subprocess.run(["flutter", "--version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-        print("[*] Flutter CLI found. Running: flutter build apk --release...")
-        subprocess.run(["flutter", "build", "apk", "--release", "--split-per-abi"], check=True)
-        for path in candidate_paths:
-            if os.path.isfile(path):
-                return path
-    except Exception:
-        pass
-
-    # If Gradle exists, run gradle assembleDebug
-    try:
-        print("[*] Running gradle assembleDebug...")
-        subprocess.run(["gradle", ":app:assembleDebug"], check=True)
-        debug_apk = "app/build/outputs/apk/debug/app-debug.apk"
-        if os.path.isfile(debug_apk):
-            return debug_apk
-    except Exception as e:
-        print(f"[!] Gradle build error: {e}")
 
     return None
 

@@ -69,4 +69,16 @@ class ExampleUnitTest {
         val cleaned = UrlResolver.cleanTrackingParams(tracked)
         assertEquals("https://www.tiktok.com/@user/video/123456789", cleaned)
     }
+
+    @Test
+    fun testPrefixAndSymbolsSanitization() {
+        val equalsPrefix = "==https://www.instagram.com/reel/C3_abcde/=="
+        assertEquals("https://www.instagram.com/reel/C3_abcde", UrlResolver.sanitizeAndExtractUrl(equalsPrefix))
+
+        val markdownPrefix = "[Watch Reel](https://www.instagram.com/reel/C3_abcde/)"
+        assertEquals("https://www.instagram.com/reel/C3_abcde", UrlResolver.sanitizeAndExtractUrl(markdownPrefix))
+
+        val socialShare = "Amazing pin! Check it out: https://pin.it/7abcXYZ (via Pinterest)"
+        assertEquals("https://pin.it/7abcXYZ", UrlResolver.sanitizeAndExtractUrl(socialShare))
+    }
 }

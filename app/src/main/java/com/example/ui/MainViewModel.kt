@@ -105,14 +105,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onUrlChange(newUrl: String) {
-        // If the input contains pasted content with captions, spaces, newlines, or accidental prefixes
-        val hasPastedBlock = newUrl.contains("\n") ||
-                (newUrl.contains(" ") && (newUrl.contains("http://") || newUrl.contains("https://"))) ||
-                newUrl.startsWith("/http") || newUrl.startsWith("\\http") || newUrl.startsWith("//http")
-
-        val finalUrl = if (hasPastedBlock) {
-            val extracted = com.example.service.UrlResolver.sanitizeAndExtractUrl(newUrl)
-            if (extracted.isNotBlank()) extracted else newUrl
+        // If the input contains pasted content with captions, symbols like "==", spaces, newlines, or accidental prefixes
+        val hasHttp = newUrl.contains("http://", ignoreCase = true) || newUrl.contains("https://", ignoreCase = true)
+        val finalUrl = if (hasHttp) {
+            val trimmed = newUrl.trim()
+            val startsClean = trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)
+            val hasExtraPrefixOrSpaces = !startsClean ||
+                    trimmed.contains(" ") ||
+                    trimmed.contains("\n") ||
+                    trimmed.contains("==") ||
+                    trimmed.startsWith("/") ||
+                    trimmed.startsWith("\\")
+            if (hasExtraPrefixOrSpaces) {
+                val extracted = com.example.service.UrlResolver.sanitizeAndExtractUrl(trimmed)
+                if (extracted.isNotBlank()) extracted else newUrl
+            } else {
+                newUrl
+            }
         } else {
             newUrl
         }

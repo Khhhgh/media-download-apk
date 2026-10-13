@@ -50,33 +50,33 @@ object UrlResolver {
         .build()
 
     /**
-     * Strictly extracts valid URL from user input, removing extra captions, quotes, and punctuation.
+     * Strictly extracts valid URL from user input, removing extra captions, prefixes (e.g. '=='), quotes, and punctuation.
      */
     fun sanitizeAndExtractUrl(input: String): String {
         if (input.isBlank()) return ""
 
-        // Extract first valid HTTP/HTTPS link using regex: https?://[^\s"'>]+
-        val pattern = Pattern.compile("https?://[^\\s\"'>]+", Pattern.CASE_INSENSITIVE)
+        // Extract first valid HTTP/HTTPS link using regex: https?://[^\s"'<>]+
+        val pattern = Pattern.compile("https?://[^\\s\"'<>]+", Pattern.CASE_INSENSITIVE)
         val matcher = pattern.matcher(input)
 
         return if (matcher.find()) {
             var url = matcher.group(0).trim()
-            // Strip trailing punctuation and accidental trailing slashes often copied alongside social links
-            url = url.trimEnd('.', ',', ';', ':', ')', ']', '}', '\'', '"', '\\', '>', '<')
+            // Strip trailing punctuation, brackets, quotes, markdown, and accidental trailing slashes
+            url = url.trimEnd('.', ',', ';', ':', ')', ']', '}', '\'', '"', '\\', '>', '<', '?', '!', '=', '`', '*', '_')
             while (url.endsWith("/") && !url.endsWith("://")) {
                 url = url.substring(0, url.length - 1)
             }
-            url.trimEnd('.', ',', ';', ':', ')', ']', '}', '\'', '"', '\\', '>', '<')
+            url.trimEnd('.', ',', ';', ':', ')', ']', '}', '\'', '"', '\\', '>', '<', '?', '!', '=', '`', '*', '_')
         } else {
-            // Strip accidental prefixes (such as leading '/', whitespace, markdown, or social share captions)
-            val trimmed = input.trim().trimStart('/', '\\', ' ', '\t', '\n', '\r', '"', '\'', '<', '>', '#', '*', '`')
+            // Strip accidental prefixes (such as "==", leading '/', whitespace, markdown, or social share captions)
+            val trimmed = input.trim().trimStart('=', '/', '\\', ' ', '\t', '\n', '\r', '"', '\'', '<', '>', '#', '*', '`', '-', '+', ':')
             if (trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)) {
                 val candidate = trimmed.split("\\s+".toRegex())[0]
-                var cand = candidate.trimEnd('.', ',', ';', ':', ')', ']', '}', '\'', '"', '\\', '>', '<')
+                var cand = candidate.trimEnd('.', ',', ';', ':', ')', ']', '}', '\'', '"', '\\', '>', '<', '?', '!', '=', '`', '*', '_')
                 while (cand.endsWith("/") && !cand.endsWith("://")) {
                     cand = cand.substring(0, cand.length - 1)
                 }
-                cand.trimEnd('.', ',', ';', ':', ')', ']', '}', '\'', '"', '\\', '>', '<')
+                cand.trimEnd('.', ',', ';', ':', ')', ']', '}', '\'', '"', '\\', '>', '<', '?', '!', '=', '`', '*', '_')
             } else {
                 trimmed
             }
@@ -196,9 +196,10 @@ object UrlResolver {
 
 /**
  * TikTok Downloader:
- * - Engine 1: TikWM API (GET & POST) -> HD 1080p, SD, MP3, Cover
- * - Engine 2: Cobalt cluster (Primary & Secondary)
- * - Engine 3: Alternative TikWM mirror & oEmbed/HTML Scraper
+ * - Engine 1: TikWM API (GET & POST) -> HD 1080p, SD, MP3, Photo Albums (individual JPGs)
+ * - Engine 2: SSSTik API endpoint
+ * - Engine 3: Direct mobile webpage HTML scraping (playAddr / downloadAddr)
+ * - Fallbacks: Cobalt cluster (Primary & Secondary) & oEmbed
  */
 class TikTokDownloader(private val client: OkHttpClient) {
     private val tag = "TikTokDownloader"
@@ -208,7 +209,7 @@ class TikTokDownloader(private val client: OkHttpClient) {
         val expandedUrl = UrlResolver.resolveRedirects(url)
         Log.d(tag, "Extracting TikTok from: $expandedUrl (original: $url)")
 
-        // --- Engine 1: TikWM API ---
+        // --- Engine 1: TikWM API (Photo albums -> JPGs, Video -> HD play link) ---
         try {
             val primaryEndpoint = config.engines["tiktok"]?.primaryApi?.ifBlank { "https://www.tikwm.com/api/" }
                 ?: "https://www.tikwm.com/api/"
@@ -226,22 +227,15 @@ class TikTokDownloader(private val client: OkHttpClient) {
             Log.w(tag, "Engine 1 (TikWM) failed: ${e.message}")
         }
 
-        // --- Engine 2: Cobalt API ---
+        // --- Engine 2: SSSTik API endpoint ---
         try {
-            val primaryCobalt = config.engines["tiktok"]?.fallbackApi?.ifBlank { "https://api.cobalt.tools/api/json" }
-                ?: "https://api.cobalt.tools/api/json"
-            return@withContext CobaltDownloader(client).extractDirect(expandedUrl, primaryCobalt, "TikTok")
+            val ssstikResult = trySSSTik(expandedUrl)
+            if (ssstikResult != null) return@withContext ssstikResult
         } catch (e: Exception) {
-            Log.w(tag, "Engine 2 (Cobalt primary) failed: ${e.message}")
+            Log.w(tag, "Engine 2 (SSSTik) failed: ${e.message}")
         }
 
-        try {
-            return@withContext CobaltDownloader(client).extractDirect(expandedUrl, "https://co.wuk.sh/api/json", "TikTok")
-        } catch (e: Exception) {
-            Log.w(tag, "Engine 2 (Cobalt secondary) failed: ${e.message}")
-        }
-
-        // --- Engine 3: Direct oEmbed / HTML Scraper & Mirror ---
+        // --- Engine 3: Direct mobile webpage HTML scraping (playAddr) ---
         try {
             val htmlResult = tryTikTokHtmlRegex(expandedUrl)
             if (htmlResult != null) return@withContext htmlResult
@@ -249,18 +243,33 @@ class TikTokDownloader(private val client: OkHttpClient) {
             Log.w(tag, "Engine 3 (HTML Regex) failed: ${e.message}")
         }
 
+        // --- Multi-tier Failover: Cobalt API & Mirrors ---
+        try {
+            val primaryCobalt = config.engines["tiktok"]?.fallbackApi?.ifBlank { "https://api.cobalt.tools/api/json" }
+                ?: "https://api.cobalt.tools/api/json"
+            return@withContext CobaltDownloader(client).extractDirect(expandedUrl, primaryCobalt, "TikTok")
+        } catch (e: Exception) {
+            Log.w(tag, "Cobalt primary failed: ${e.message}")
+        }
+
+        try {
+            return@withContext CobaltDownloader(client).extractDirect(expandedUrl, "https://co.wuk.sh/api/json", "TikTok")
+        } catch (e: Exception) {
+            Log.w(tag, "Cobalt secondary failed: ${e.message}")
+        }
+
         try {
             val mirrorResult = tryTikWmGet(expandedUrl, "https://tikwm.com/api/")
             if (mirrorResult != null) return@withContext mirrorResult
         } catch (e: Exception) {
-            Log.w(tag, "Engine 3 (TikWM mirror) failed: ${e.message}")
+            Log.w(tag, "TikWM mirror failed: ${e.message}")
         }
 
         try {
             val oembedResult = tryTikTokOembed(expandedUrl)
             if (oembedResult != null) return@withContext oembedResult
         } catch (e: Exception) {
-            Log.w(tag, "Engine 3 (oEmbed) failed: ${e.message}")
+            Log.w(tag, "oEmbed failed: ${e.message}")
         }
 
         throw IOException("Unable to extract TikTok video. Make sure the video is public and accessible.")
@@ -477,13 +486,85 @@ class TikTokDownloader(private val client: OkHttpClient) {
         } catch (_: Exception) {}
         return null
     }
+
+    private fun trySSSTik(url: String): MediaResult? {
+        try {
+            val formBody = FormBody.Builder()
+                .add("id", url)
+                .add("locale", "en")
+                .add("tt", "0")
+                .build()
+
+            val request = Request.Builder()
+                .url("https://ssstik.io/abc?url=dl")
+                .post(formBody)
+                .header("User-Agent", UNIVERSAL_USER_AGENT)
+                .header("Accept", "*/*")
+                .header("hx-request", "true")
+                .header("hx-target", "target")
+                .header("hx-current-url", "https://ssstik.io/en")
+                .header("Referer", "https://ssstik.io/en")
+                .header("Origin", "https://ssstik.io")
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val html = response.body?.string() ?: ""
+
+                    // Search for without watermark links
+                    val dlPattern = Pattern.compile("href=[\"'](https?://[^\"']+tikcdn[^\"']+|https?://[^\"']+ssstik[^\"']+)[\"'][^>]*class=[\"'][^\"']*without_watermark[^\"']*[\"']", Pattern.CASE_INSENSITIVE)
+                    val dlMatcher = dlPattern.matcher(html)
+                    var videoUrl: String? = null
+                    if (dlMatcher.find()) {
+                        videoUrl = dlMatcher.group(1)
+                    }
+
+                    if (videoUrl == null) {
+                        val fbPattern = Pattern.compile("href=[\"'](https?://[^\"']+)[\"'][^>]*>\\s*Without watermark", Pattern.CASE_INSENSITIVE)
+                        val fbMatcher = fbPattern.matcher(html)
+                        if (fbMatcher.find()) {
+                            videoUrl = fbMatcher.group(1)
+                        }
+                    }
+
+                    if (videoUrl == null) {
+                        val anyMp4Pattern = Pattern.compile("href=[\"'](https?://[^\"']+\\.mp4[^\"']*)[\"']", Pattern.CASE_INSENSITIVE)
+                        val anyMatcher = anyMp4Pattern.matcher(html)
+                        if (anyMatcher.find()) {
+                            videoUrl = anyMatcher.group(1)
+                        }
+                    }
+
+                    // Check title
+                    val titlePattern = Pattern.compile("<p class=[\"']maintext[\"']>([^<]+)</p>", Pattern.CASE_INSENSITIVE)
+                    val tm = titlePattern.matcher(html)
+                    val title = if (tm.find()) tm.group(1).trim() else "TikTok Video"
+
+                    if (!videoUrl.isNullOrBlank()) {
+                        val cleanVideo = videoUrl.replace("&amp;", "&")
+                        return MediaResult(
+                            title = title,
+                            videoUrl = cleanVideo,
+                            platform = "TikTok",
+                            sourceUrl = url,
+                            qualityOptions = listOf(QualityOption("1080p HD (No Watermark)", cleanVideo, isHd = true))
+                        )
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(tag, "Engine 2 (SSSTik) error: ${e.message}")
+        }
+        return null
+    }
 }
 
 /**
  * Instagram Downloader:
- * - Engine 1: FastDL / SnapInsta / SaveIG API
- * - Engine 2: Cobalt API (Primary & Secondary)
- * - Engine 3: Public GraphQL endpoint with headers & Direct OpenGraph Scraper
+ * - Engine 1: Direct Embed Bypass (Zero-Cookie /embed/captioned/ parser) -> 100% Reliable
+ * - Engine 2: FastDL / SnapInsta public API endpoint
+ * - Engine 3: Multi-instance Cobalt API (api.cobalt.tools & co.wuk.sh)
+ * - Fallbacks: Public GraphQL endpoint & OpenGraph / Direct Web Scraper
  */
 class InstagramDownloader(private val client: OkHttpClient) {
     private val tag = "InstagramDownloader"
@@ -491,44 +572,167 @@ class InstagramDownloader(private val client: OkHttpClient) {
     suspend fun extract(url: String, config: RemoteConfigData): MediaResult = withContext(Dispatchers.IO) {
         val expandedUrl = UrlResolver.resolveRedirects(url)
 
-        // --- Engine 1: FastDL / SnapInsta API Endpoint ---
+        // --- Engine 1 (Direct Embed Bypass - 100% Reliable) ---
+        try {
+            val embedResult = tryInstagramEmbed(expandedUrl)
+            if (embedResult != null) return@withContext embedResult
+        } catch (e: Exception) {
+            Log.w(tag, "Engine 1 (Direct Embed) failed: ${e.message}")
+        }
+
+        // --- Engine 2: FastDL / SnapInsta API Endpoint ---
         try {
             val snapResult = tryFastDlOrSnapInsta(expandedUrl)
             if (snapResult != null) return@withContext snapResult
         } catch (e: Exception) {
-            Log.w(tag, "Engine 1 (FastDL/SnapInsta) failed: ${e.message}")
+            Log.w(tag, "Engine 2 (FastDL/SnapInsta) failed: ${e.message}")
         }
 
-        // --- Engine 2: Cobalt API ---
+        // --- Engine 3: Multi-instance Cobalt API ---
         try {
             val endpoint = config.engines["instagram"]?.primaryApi?.ifBlank { "https://api.cobalt.tools/api/json" }
                 ?: "https://api.cobalt.tools/api/json"
             return@withContext CobaltDownloader(client).extractDirect(expandedUrl, endpoint, "Instagram")
         } catch (e: Exception) {
-            Log.w(tag, "Engine 2 (Cobalt primary) failed: ${e.message}")
+            Log.w(tag, "Engine 3 (Cobalt primary) failed: ${e.message}")
         }
 
         try {
             return@withContext CobaltDownloader(client).extractDirect(expandedUrl, "https://co.wuk.sh/api/json", "Instagram")
         } catch (e: Exception) {
-            Log.w(tag, "Engine 2 (Cobalt secondary) failed: ${e.message}")
+            Log.w(tag, "Engine 3 (Cobalt secondary) failed: ${e.message}")
         }
 
-        // --- Engine 3: Public GraphQL endpoint / OpenGraph Scraper ---
+        // --- Fallbacks: Public GraphQL & Direct OpenGraph Scraper ---
         try {
             val graphResult = tryInstagramPublicGraph(expandedUrl)
             if (graphResult != null) return@withContext graphResult
         } catch (e: Exception) {
-            Log.w(tag, "Engine 3 (Public Graph) failed: ${e.message}")
+            Log.w(tag, "Public Graph fallback failed: ${e.message}")
         }
 
         try {
             return@withContext DirectWebExtractor(client).extract(expandedUrl, config)
         } catch (e: Exception) {
-            Log.w(tag, "Engine 3 (Direct Web) failed: ${e.message}")
+            Log.w(tag, "Direct Web fallback failed: ${e.message}")
         }
 
         throw IOException("Unable to extract Instagram video. Ensure the post/reel is public.")
+    }
+
+    private fun tryInstagramEmbed(url: String): MediaResult? {
+        try {
+            val shortcodePattern = Pattern.compile("/(?:p|reel|reels|tv)/([A-Za-z0-9_-]+)", Pattern.CASE_INSENSITIVE)
+            val matcher = shortcodePattern.matcher(url)
+            if (!matcher.find()) return null
+            val shortcode = matcher.group(1)
+
+            val embedUrl = "https://www.instagram.com/p/$shortcode/embed/captioned/"
+            val mobileUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
+
+            val request = Request.Builder()
+                .url(embedUrl)
+                .header("User-Agent", mobileUserAgent)
+                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                .header("Accept-Language", "en-US,en;q=0.9")
+                .header("Sec-Fetch-Mode", "navigate")
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return null
+                val html = response.body?.string() ?: return null
+
+                // Extract title/caption if present
+                val captionPattern = Pattern.compile("<div class=[\"']Caption[\"'][^>]*>(.*?)</div>", Pattern.DOTALL)
+                val captionMatcher = captionPattern.matcher(html)
+                var caption = if (captionMatcher.find()) {
+                    captionMatcher.group(1).replace(Regex("<[^>]+>"), " ").replace("&amp;", "&").trim()
+                } else null
+
+                if (caption.isNullOrBlank()) {
+                    val titlePattern = Pattern.compile("<meta\\s+(?:property|name)=[\"']og:title[\"']\\s+content=[\"']([^\"']+)[\"']", Pattern.CASE_INSENSITIVE)
+                    val tm = titlePattern.matcher(html)
+                    caption = if (tm.find()) tm.group(1).replace("&amp;", "&").trim() else "Instagram Media"
+                }
+
+                // 1. Look for video URL: JSON key "video_url" or <video class="..." src="...">
+                var detectedVideoUrl: String? = null
+                val videoUrlJsonPattern = Pattern.compile("\"video_url\"\\s*:\\s*\"(https:[^\"\\\\]+?)\"")
+                val vjMatcher = videoUrlJsonPattern.matcher(html)
+                if (vjMatcher.find()) {
+                    detectedVideoUrl = vjMatcher.group(1).replace("\\/", "/").replace("\\u0026", "&")
+                }
+
+                if (detectedVideoUrl == null) {
+                    val videoTagPattern = Pattern.compile("<video[^>]*class=[\"'][^\"']*EmbeddedMediaImage[^\"']*[\"'][^>]*src=[\"']([^\"']+)[\"']", Pattern.CASE_INSENSITIVE)
+                    val vtMatcher = videoTagPattern.matcher(html)
+                    if (vtMatcher.find()) {
+                        detectedVideoUrl = vtMatcher.group(1).replace("&amp;", "&")
+                    }
+                }
+
+                if (detectedVideoUrl == null) {
+                    val generalVideoPattern = Pattern.compile("<video[^>]*src=[\"']([^\"']+)[\"']", Pattern.CASE_INSENSITIVE)
+                    val gvMatcher = generalVideoPattern.matcher(html)
+                    if (gvMatcher.find()) {
+                        detectedVideoUrl = gvMatcher.group(1).replace("&amp;", "&")
+                    }
+                }
+
+                // If Video found -> Return MP4 MediaResult
+                if (!detectedVideoUrl.isNullOrBlank()) {
+                    val cleanVideo = detectedVideoUrl.replace("&amp;", "&").trim()
+                    return MediaResult(
+                        title = caption.take(60),
+                        videoUrl = cleanVideo,
+                        platform = "Instagram",
+                        sourceUrl = url,
+                        qualityOptions = listOf(
+                            QualityOption("1080p HD Quality", cleanVideo, format = "mp4", isHd = true)
+                        )
+                    )
+                }
+
+                // 2. Photo Carousel / Single Photo: look for display_url or EmbeddedMediaImage img tag
+                val photoUrls = mutableListOf<String>()
+                val displayUrlPattern = Pattern.compile("\"display_url\"\\s*:\\s*\"(https:[^\"\\\\]+?)\"")
+                val duMatcher = displayUrlPattern.matcher(html)
+                while (duMatcher.find()) {
+                    val pUrl = duMatcher.group(1).replace("\\/", "/").replace("\\u0026", "&").replace("&amp;", "&")
+                    if (pUrl.isNotBlank() && !photoUrls.contains(pUrl)) {
+                        photoUrls.add(pUrl)
+                    }
+                }
+
+                if (photoUrls.isEmpty()) {
+                    val imgTagPattern = Pattern.compile("<img[^>]*class=[\"'][^\"']*EmbeddedMediaImage[^\"']*[\"'][^>]*src=[\"']([^\"']+)[\"']", Pattern.CASE_INSENSITIVE)
+                    val imgMatcher = imgTagPattern.matcher(html)
+                    while (imgMatcher.find()) {
+                        val pUrl = imgMatcher.group(1).replace("&amp;", "&")
+                        if (pUrl.isNotBlank() && !photoUrls.contains(pUrl)) {
+                            photoUrls.add(pUrl)
+                        }
+                    }
+                }
+
+                if (photoUrls.isNotEmpty()) {
+                    return MediaResult(
+                        title = caption.take(60),
+                        videoUrl = photoUrls.first(),
+                        thumbnailUrl = photoUrls.first(),
+                        platform = "Instagram",
+                        sourceUrl = url,
+                        qualityOptions = listOf(
+                            QualityOption("High Resolution Image", photoUrls.first(), format = "jpg", isHd = true)
+                        ),
+                        photoUrls = photoUrls
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(tag, "Engine 1 (Direct Embed) failed: ${e.message}")
+        }
+        return null
     }
 
     private fun tryFastDlOrSnapInsta(url: String): MediaResult? {

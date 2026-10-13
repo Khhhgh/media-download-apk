@@ -29,20 +29,25 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.theme.CyberBackground
@@ -161,64 +166,68 @@ fun UrlInputCard(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                OutlinedTextField(
-                    value = url,
-                    onValueChange = onUrlChange,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("url_input_field"),
-                    placeholder = {
-                        Text(
-                            text = if (isArabic) "https://www.tiktok.com/... أو instagram أو x" else "https://tiktok.com/... or Instagram, X, etc.",
-                            color = CyberTextMuted,
-                            fontSize = 13.sp
-                        )
-                    },
-                    leadingIcon = {
-                        Icon(
-                            imageVector = Icons.Default.Link,
-                            contentDescription = "Link",
-                            tint = NeonCyan
-                        )
-                    },
-                    trailingIcon = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (url.isNotBlank()) {
-                                IconButton(onClick = onClearClick) {
+                // Explicit LTR Directionality for URL input field to prevent clipping, cursor inversion, or RTL distortion
+                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                    OutlinedTextField(
+                        value = url,
+                        onValueChange = onUrlChange,
+                        textStyle = LocalTextStyle.current.copy(textDirection = TextDirection.Ltr),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("url_input_field"),
+                        placeholder = {
+                            Text(
+                                text = if (isArabic) "https://www.tiktok.com/... أو instagram أو x" else "https://tiktok.com/... or Instagram, X, etc.",
+                                color = CyberTextMuted,
+                                fontSize = 13.sp
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.Link,
+                                contentDescription = "Link",
+                                tint = NeonCyan
+                            )
+                        },
+                        trailingIcon = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (url.isNotBlank()) {
+                                    IconButton(onClick = onClearClick) {
+                                        Icon(
+                                            imageVector = Icons.Default.Clear,
+                                            contentDescription = "Clear",
+                                            tint = CyberTextMuted
+                                        )
+                                    }
+                                }
+                                IconButton(onClick = onPasteClick) {
                                     Icon(
-                                        imageVector = Icons.Default.Clear,
-                                        contentDescription = "Clear",
-                                        tint = CyberTextMuted
+                                        imageVector = Icons.Default.ContentPaste,
+                                        contentDescription = "Paste",
+                                        tint = NeonCyan
                                     )
                                 }
                             }
-                            IconButton(onClick = onPasteClick) {
-                                Icon(
-                                    imageVector = Icons.Default.ContentPaste,
-                                    contentDescription = "Paste",
-                                    tint = NeonCyan
-                                )
-                            }
-                        }
-                    },
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = CyberBackground,
-                        unfocusedContainerColor = CyberBackground,
-                        focusedBorderColor = NeonCyan,
-                        unfocusedBorderColor = CyberBorder,
-                        focusedTextColor = CyberTextPrimary,
-                        unfocusedTextColor = CyberTextPrimary
-                    ),
-                    shape = RoundedCornerShape(12.dp),
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Uri,
-                        imeAction = ImeAction.Done
-                    ),
-                    keyboardActions = KeyboardActions(
-                        onDone = { onSubmit() }
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = CyberBackground,
+                            unfocusedContainerColor = CyberBackground,
+                            focusedBorderColor = NeonCyan,
+                            unfocusedBorderColor = CyberBorder,
+                            focusedTextColor = CyberTextPrimary,
+                            unfocusedTextColor = CyberTextPrimary
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Uri,
+                            imeAction = ImeAction.Done
+                        ),
+                        keyboardActions = KeyboardActions(
+                            onDone = { onSubmit() }
+                        )
                     )
-                )
+                }
 
                 Spacer(modifier = Modifier.height(14.dp))
 
