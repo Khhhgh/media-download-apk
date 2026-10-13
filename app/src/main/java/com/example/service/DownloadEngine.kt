@@ -655,31 +655,33 @@ class InstagramDownloader(private val client: OkHttpClient) {
                     caption = if (tm.find()) tm.group(1).replace("&amp;", "&").trim() else "Instagram Media"
                 }
 
-                // 1. Look for video URL: JSON key "video_url" or <video class="..." src="...">
+                // 1. Prefer actual video streams. Never treat poster/thumbnail images as video.
                 var detectedVideoUrl: String? = null
-                val videoUrlJsonPattern = Pattern.compile("\"video_url\"\\s*:\\s*\"(https:[^\"\\\\]+?)\"")
-                val vjMatcher = videoUrlJsonPattern.matcher(html)
-                if (vjMatcher.find()) {
-                    detectedVideoUrl = vjMatcher.group(1).replace("\\/", "/").replace("\\u0026", "&")
-                }
-
-                if (detectedVideoUrl == null) {
-                    val videoTagPattern = Pattern.compile("<video[^>]*class=[\"'][^\"']*EmbeddedMediaImage[^\"']*[\"'][^>]*src=[\"']([^\"']+)[\"']", Pattern.CASE_INSENSITIVE)
-                    val vtMatcher = videoTagPattern.matcher(html)
-                    if (vtMatcher.find()) {
-                        detectedVideoUrl = vtMatcher.group(1).replace("&amp;", "&")
+                val videoPatterns = listOf(
+                    Pattern.compile("\"video_url\"\\s*:\\s*\"(https?:\\\\?/\\\\?/[^\"\\\\]+)\"", Pattern.CASE_INSENSITIVE),
+                    Pattern.compile("\"video_versions\"\\s*:\\s*\\[\\s*\\{[^}]*?\"url\"\\s*:\\s*\"(https?:[^\"\\\\]+)", Pattern.CASE_INSENSITIVE or Pattern.DOTALL),
+                    Pattern.compile("<video\\b[^>]*\\bsrc\\s*=\\s*[\"']([^\"']+)[\"']", Pattern.CASE_INSENSITIVE),
+                    Pattern.compile("<source\\b[^>]*\\bsrc\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>", Pattern.CASE_INSENSITIVE),
+                    Pattern.compile("<meta\\b[^>]*(?:property|name)\\s*=\\s*[\"']og:video(?::secure_url)?[\"'][^>]*content\\s*=\\s*[\"']([^\"']+)[\"']", Pattern.CASE_INSENSITIVE)
+                )
+                for (pattern in videoPatterns) {
+                    val vm = pattern.matcher(html)
+                    if (vm.find()) {
+                        val candidate = vm.group(1)
+                            .replace("\\\\/", "/")
+                            .replace("\\u0026", "&")
+                            .replace("&amp;", "&")
+                            .trim()
+                        if (candidate.startsWith("http", ignoreCase = true) &&
+                            !candidate.matches(Regex("(?i).*\\.(jpg|jpeg|png|webp)(\\?.*)?$"))) {
+                            detectedVideoUrl = candidate
+                            break
+                        }
                     }
                 }
 
-                if (detectedVideoUrl == null) {
-                    val generalVideoPattern = Pattern.compile("<video[^>]*src=[\"']([^\"']+)[\"']", Pattern.CASE_INSENSITIVE)
-                    val gvMatcher = generalVideoPattern.matcher(html)
-                    if (gvMatcher.find()) {
-                        detectedVideoUrl = gvMatcher.group(1).replace("&amp;", "&")
-                    }
-                }
-
-                // If Video found -> Return MP4 MediaResult
+                // If this is a Reel/video URL, don't fall back to its cover image.
+                val isReelOrVideo = Regex("/(?:reel|reels|tv)/", RegexOption.IGNORE_CASE).containsMatchIn(url)
                 if (!detectedVideoUrl.isNullOrBlank()) {
                     val cleanVideo = detectedVideoUrl.replace("&amp;", "&").trim()
                     return MediaResult(
@@ -688,9 +690,13 @@ class InstagramDownloader(private val client: OkHttpClient) {
                         platform = "Instagram",
                         sourceUrl = url,
                         qualityOptions = listOf(
-                            QualityOption("1080p HD Quality", cleanVideo, format = "mp4", isHd = true)
+                            QualityOption("Original MP4 Video", cleanVideo, format = "mp4", isHd = true)
                         )
                     )
+                }
+                if (isReelOrVideo) {
+                    Log.w(tag, "Reel/video detected but no direct video stream found; refusing thumbnail fallback")
+                    return null
                 }
 
                 // 2. Photo Carousel / Single Photo: look for display_url or EmbeddedMediaImage img tag
@@ -762,7 +768,8 @@ class InstagramDownloader(private val client: OkHttpClient) {
                         if (videoArray != null && videoArray.length() > 0) {
                             val first = videoArray.getJSONObject(0)
                             val videoUrl = first.optString("url")
-                            if (videoUrl.isNotBlank()) {
+                            if (videoUrl.isNotBlank() &&
+                                !videoUrl.matches(Regex("(?i).*\\.(jpg|jpeg|png|webp)(\\?.*)?$"))) {
                                 return MediaResult(
                                     title = "Instagram Reel",
                                     videoUrl = videoUrl,
