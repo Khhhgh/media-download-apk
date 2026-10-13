@@ -24,8 +24,10 @@ import java.util.concurrent.TimeUnit
 
 class FileDownloadService(private val context: Context) {
     private val client = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
+        .connectTimeout(25, TimeUnit.SECONDS)
+        .readTimeout(90, TimeUnit.SECONDS)
+        .followRedirects(true)
+        .followSslRedirects(true)
         .build()
 
     suspend fun downloadMedia(
@@ -41,7 +43,10 @@ class FileDownloadService(private val context: Context) {
         try {
             val request = Request.Builder()
                 .url(downloadUrl)
-                .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+                .header("Accept", "*/*")
+                .header("Accept-Encoding", "identity")
+                .header("Connection", "keep-alive")
                 .build()
 
             val response = client.newCall(request).execute()

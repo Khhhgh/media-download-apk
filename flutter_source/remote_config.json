@@ -7,7 +7,7 @@
   },
   "engines": {
     "tiktok": {
-      "regex": "(tiktok\\.com|douyin\\.com)",
+      "regex": "(tiktok\\.com|douyin\\.com|tt\\.site)",
       "primary_api": "https://api.tikwm.com/api/",
       "fallback_api": "https://co.wuk.sh/api/json"
     },

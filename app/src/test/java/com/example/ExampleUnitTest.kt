@@ -1,6 +1,8 @@
 package com.example
 
 import com.example.service.MasterDownloadEngine
+import com.example.service.UrlResolver
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -24,9 +26,11 @@ class ExampleUnitTest {
 
     @Test
     fun testRemoteEngineRegexMatching() {
-        val tiktokPattern = Pattern.compile("(tiktok\\.com|douyin\\.com)", Pattern.CASE_INSENSITIVE)
+        val tiktokPattern = Pattern.compile("(tiktok\\.com|douyin\\.com|tt\\.site)", Pattern.CASE_INSENSITIVE)
         assertTrue(tiktokPattern.matcher("https://www.tiktok.com/@creator/video/123").find())
         assertTrue(tiktokPattern.matcher("https://vm.tiktok.com/ZM8abcde/").find())
+        assertTrue(tiktokPattern.matcher("https://www.tt.site/t/ZSabc123/").find())
+        assertTrue(tiktokPattern.matcher("https://tt.site/t/ZSabc123").find())
 
         val instagramPattern = Pattern.compile("(instagram\\.com|instagr\\.am)", Pattern.CASE_INSENSITIVE)
         assertTrue(instagramPattern.matcher("https://www.instagram.com/reel/Cw_example").find())
@@ -39,5 +43,30 @@ class ExampleUnitTest {
         val facebookPattern = Pattern.compile("(facebook\\.com|fb\\.watch)", Pattern.CASE_INSENSITIVE)
         assertTrue(facebookPattern.matcher("https://fb.watch/m123456/").find())
         assertTrue(facebookPattern.matcher("https://www.facebook.com/reel/123456789").find())
+    }
+
+    @Test
+    fun testTikTokShortenedVariants() {
+        assertTrue(UrlResolver.isTikTokShortenedUrl("https://www.tt.site/t/ZS12345/"))
+        assertTrue(UrlResolver.isTikTokShortenedUrl("https://tt.site/t/ZS12345"))
+        assertTrue(UrlResolver.isTikTokShortenedUrl("https://vt.tiktok.com/ZS12345/"))
+        assertTrue(UrlResolver.isTikTokShortenedUrl("https://vm.tiktok.com/ZS12345/"))
+        assertTrue(UrlResolver.isTikTokShortenedUrl("https://www.tiktok.com/t/ZS12345/"))
+
+        assertFalse(UrlResolver.isTikTokShortenedUrl("https://www.instagram.com/reel/123"))
+    }
+
+    @Test
+    fun testUrlExtractorCleaning() {
+        val messy = "Watch this video: https://vt.tiktok.com/ZS12345/ now!"
+        val extracted = UrlResolver.extractUrlFromString(messy)
+        assertEquals("https://vt.tiktok.com/ZS12345", extracted)
+
+        val ttSite = "Check out https://www.tt.site/t/ZSabc12/ on tt"
+        assertEquals("https://www.tt.site/t/ZSabc12", UrlResolver.extractUrlFromString(ttSite))
+
+        val tracked = "https://www.tiktok.com/@user/video/123456789?is_from_webapp=1&sender_device=pc"
+        val cleaned = UrlResolver.cleanTrackingParams(tracked)
+        assertEquals("https://www.tiktok.com/@user/video/123456789", cleaned)
     }
 }

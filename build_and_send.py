@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 """
 Build and Deployment Automation Script: media download - تحميل الميديا
-Compiles the Flutter application and delivers the release APK to your Telegram chat.
+Compiles the application (Flutter or Gradle) and delivers the APK directly to your Telegram chat.
+Zero external dependencies: uses Python standard library (urllib, http.client).
 """
 
 import os
 import sys
+import json
+import uuid
 import subprocess
-import requests
+import urllib.request
+import urllib.parse
+import urllib.error
+import http.client
 
 # Configuration
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8924731332:AAG3nTlbNLHnAwmDBgJYAAk4TSmonmfVEIU")
@@ -15,82 +21,92 @@ ADMIN_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "8466040187")
 MAX_TELEGRAM_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB Telegram Bot API limit
 
 
-def check_prerequisites():
-    """Verify flutter and requests dependencies are available."""
-    try:
-        subprocess.run(["flutter", "--version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        print("[!] Error: 'flutter' CLI is not installed or not in PATH.")
-        sys.exit(1)
-
-
-def build_flutter_apk():
-    """Runs flutter build apk --release --split-per-abi to generate optimized APKs."""
-    print("[*] Starting Flutter release build (split-per-abi)...")
-    cmd = ["flutter", "build", "apk", "--release", "--split-per-abi"]
-    
-    result = subprocess.run(cmd, stdout=sys.stdout, stderr=sys.stderr)
-    if result.returncode != 0:
-        print("[!] Build failed. Attempting fallback: flutter build apk --release...")
-        fallback = subprocess.run(["flutter", "build", "apk", "--release"], stdout=sys.stdout, stderr=sys.stderr)
-        if fallback.returncode != 0:
-            print("[!] Flutter build failed completely.")
-            sys.exit(1)
-
-    # Search for output APK
-    candidate_paths = [
-        "build/app/outputs/flutter-apk/app-arm64-v8a-release.apk",
-        "build/app/outputs/flutter-apk/app-release.apk",
-        "flutter_source/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk",
-        "flutter_source/build/app/outputs/flutter-apk/app-release.apk"
-    ]
-
-    for path in candidate_paths:
-        if os.path.isfile(path):
-            print(f"[+] Found release APK: {path}")
-            return path
-
-    print("[!] Could not locate generated APK file.")
-    sys.exit(1)
-
-
 def send_telegram_message(message: str):
-    """Sends a notification message to the admin chat."""
+    """Sends an HTML formatted message to the admin chat."""
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload = {
+    payload = json.dumps({
         "chat_id": ADMIN_CHAT_ID,
         "text": message,
         "parse_mode": "HTML"
-    }
+    }).encode("utf-8")
+    
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json"}
+    )
     try:
-        resp = requests.post(url, json=payload, timeout=20)
-        return resp.json()
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data
     except Exception as e:
-        print(f"[!] Failed to send message: {e}")
+        print(f"[!] Failed to send Telegram message: {e}")
         return None
 
 
 def send_apk_direct(apk_path: str, file_size_mb: float):
-    """Sends APK directly via Telegram Bot API sendDocument."""
+    """Sends APK directly via Telegram Bot API sendDocument using multipart/form-data."""
     print(f"[*] Sending APK directly to Telegram ({file_size_mb:.2f} MB)...")
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
+    filename = os.path.basename(apk_path)
     caption = (
         "🚀 <b>media download - تحميل الميديا</b>\n"
-        "📦 <b>Release APK:</b> <code>app-arm64-v8a-release.apk</code>\n"
+        f"📦 <b>APK:</b> <code>{filename}</code>\n"
         f"📊 <b>Size:</b> {file_size_mb:.2f} MB\n"
-        "⚡ <b>Architecture:</b> Remote Engine Gist (ba31c38a)\n"
+        "⚡ <b>Architecture:</b> Remote Engine Gist & TikWM (ba31c38a)\n"
+        "🎬 <b>Platforms:</b> TikTok, Instagram, Twitter/X, Facebook + 15 Platforms\n"
         "✅ <b>Status:</b> Ready to install"
     )
 
-    with open(apk_path, "rb") as apk_file:
-        files = {"document": (os.path.basename(apk_path), apk_file, "application/vnd.android.package-archive")}
-        data = {"chat_id": ADMIN_CHAT_ID, "caption": caption, "parse_mode": "HTML"}
-        resp = requests.post(url, data=data, files=files, timeout=300)
+    boundary = f"----WebKitFormBoundary{uuid.uuid4().hex}"
+    body = bytearray()
 
-    if resp.status_code == 200:
-        print("[+] APK successfully sent to Telegram chat!")
-    else:
-        print(f"[!] Telegram API error ({resp.status_code}): {resp.text}")
+    def add_field(name, value):
+        body.extend(f"--{boundary}\r\n".encode("utf-8"))
+        body.extend(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8"))
+        body.extend(f"{value}\r\n".encode("utf-8"))
+
+    add_field("chat_id", ADMIN_CHAT_ID)
+    add_field("caption", caption)
+    add_field("parse_mode", "HTML")
+
+    # Add file field
+    file_header = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="document"; filename="{filename}"\r\n'
+        f"Content-Type: application/vnd.android.package-archive\r\n\r\n"
+    ).encode("utf-8")
+    body.extend(file_header)
+    with open(apk_path, "rb") as f:
+        body.extend(f.read())
+    body.extend(f"\r\n--{boundary}--\r\n".encode("utf-8"))
+
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
+    req = urllib.request.Request(
+        url,
+        data=bytes(body),
+        headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Content-Length": str(len(body)),
+            "User-Agent": "MediaDownloadDeployer/1.0"
+        }
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            resp_data = json.loads(resp.read().decode("utf-8"))
+            if resp_data.get("ok"):
+                print("[+] APK successfully sent to Telegram chat!")
+                return True
+            else:
+                print(f"[!] Telegram API error: {resp_data}")
+                return False
+    except urllib.error.HTTPError as e:
+        err_msg = e.read().decode("utf-8")
+        print(f"[!] HTTP Error ({e.code}): {err_msg}")
+        return False
+    except Exception as e:
+        print(f"[!] Network error sending APK: {e}")
+        return False
 
 
 def upload_and_notify_fallback(apk_path: str, file_size_mb: float):
@@ -99,22 +115,44 @@ def upload_and_notify_fallback(apk_path: str, file_size_mb: float):
     filename = os.path.basename(apk_path)
     download_url = None
 
-    # Try transfer.sh
+    # Try transfer.sh via PUT
     try:
         with open(apk_path, "rb") as f:
-            resp = requests.put(f"https://transfer.sh/{filename}", data=f, timeout=120)
-            if resp.status_code == 200:
-                download_url = resp.text.strip()
+            data = f.read()
+            req = urllib.request.Request(
+                f"https://transfer.sh/{filename}",
+                data=data,
+                method="PUT"
+            )
+            with urllib.request.urlopen(req, timeout=180) as resp:
+                if resp.status == 200:
+                    download_url = resp.read().decode("utf-8").strip()
     except Exception as e:
         print(f"[!] transfer.sh error: {e}")
 
-    # Fallback to file.io if needed
+    # Fallback to file.io if transfer.sh is unavailable
     if not download_url:
         try:
+            boundary = f"----FileIoBoundary{uuid.uuid4().hex}"
+            file_header = (
+                f"--{boundary}\r\n"
+                f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+                f"Content-Type: application/vnd.android.package-archive\r\n\r\n"
+            ).encode("utf-8")
+            body.extend(file_header)
             with open(apk_path, "rb") as f:
-                resp = requests.post("https://file.io", files={"file": f}, timeout=120)
-                if resp.status_code == 200:
-                    download_url = resp.json().get("link")
+                body.extend(f.read())
+            body.extend(f"\r\n--{boundary}--\r\n".encode("utf-8"))
+
+            req = urllib.request.Request(
+                "https://file.io",
+                data=bytes(body),
+                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}
+            )
+            with urllib.request.urlopen(req, timeout=180) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                if data.get("success"):
+                    download_url = data.get("link")
         except Exception as e:
             print(f"[!] file.io error: {e}")
 
@@ -133,16 +171,60 @@ def upload_and_notify_fallback(apk_path: str, file_size_mb: float):
         send_telegram_message(f"❌ Build completed ({file_size_mb:.2f} MB), but upload failed.")
 
 
+def find_or_build_apk():
+    """Locates existing APK or attempts build."""
+    candidate_paths = [
+        "app/build/outputs/apk/debug/app-debug.apk",
+        "app/build/outputs/apk/release/app-release.apk",
+        "build/app/outputs/flutter-apk/app-arm64-v8a-release.apk",
+        "build/app/outputs/flutter-apk/app-release.apk",
+        "flutter_source/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk",
+        "flutter_source/build/app/outputs/flutter-apk/app-release.apk"
+    ]
+
+    for path in candidate_paths:
+        if os.path.isfile(path) and os.path.getsize(path) > 1000:
+            print(f"[+] Found existing APK: {path}")
+            return path
+
+    # If Flutter CLI exists, run flutter build
+    try:
+        subprocess.run(["flutter", "--version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        print("[*] Flutter CLI found. Running: flutter build apk --release...")
+        subprocess.run(["flutter", "build", "apk", "--release", "--split-per-abi"], check=True)
+        for path in candidate_paths:
+            if os.path.isfile(path):
+                return path
+    except Exception:
+        pass
+
+    # If Gradle exists, run gradle assembleDebug
+    try:
+        print("[*] Running gradle assembleDebug...")
+        subprocess.run(["gradle", ":app:assembleDebug"], check=True)
+        debug_apk = "app/build/outputs/apk/debug/app-debug.apk"
+        if os.path.isfile(debug_apk):
+            return debug_apk
+    except Exception as e:
+        print(f"[!] Gradle build error: {e}")
+
+    return None
+
+
 def main():
-    check_prerequisites()
-    apk_path = build_flutter_apk()
+    apk_path = find_or_build_apk()
+    if not apk_path:
+        print("[!] No APK found and build could not complete.")
+        sys.exit(1)
+
     size_bytes = os.path.getsize(apk_path)
     size_mb = size_bytes / (1024 * 1024)
-
-    print(f"[*] File size: {size_mb:.2f} MB ({size_bytes} bytes)")
+    print(f"[*] Target APK: {apk_path} ({size_mb:.2f} MB)")
 
     if size_bytes <= MAX_TELEGRAM_SIZE_BYTES:
-        send_apk_direct(apk_path, size_mb)
+        success = send_apk_direct(apk_path, size_mb)
+        if not success:
+            upload_and_notify_fallback(apk_path, size_mb)
     else:
         upload_and_notify_fallback(apk_path, size_mb)
 

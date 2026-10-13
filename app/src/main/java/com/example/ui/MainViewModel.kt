@@ -139,7 +139,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun startExtraction(url: String = _urlInput.value) {
-        val cleanUrl = url.trim()
+        val cleanUrl = com.example.service.UrlResolver.extractUrlFromString(url)
         if (cleanUrl.isBlank()) {
             emitToast(if (_isArabic.value) "يرجى إدخال رابط صالح" else "Please enter a valid link")
             return
