@@ -23,3 +23,7 @@ val CyberBorderGlow = Color(0xFF00F2FE)
 val SuccessGreen = Color(0xFF10B981)
 val WarningAmber = Color(0xFFF59E0B)
 val ErrorRed = Color(0xFFEF4444)
+
+val CyberPrimary = NeonCyan
+val CyberAccentGreen = SuccessGreen
+val CyberCardBorder = CyberBorder

@@ -57,6 +57,7 @@ import com.example.ui.MainViewModel
 import com.example.ui.components.AppHeader
 import com.example.ui.components.HistoryView
 import com.example.ui.components.MediaPreviewModal
+import com.example.ui.components.ForcedUpdateDialog
 import com.example.ui.components.PlatformChips
 import com.example.ui.components.RemoteConfigDialog
 import com.example.ui.components.UrlInputCard
@@ -101,6 +102,9 @@ fun MediaDownloadApp(viewModel: MainViewModel) {
     val activePlayingItem by viewModel.activePlayingItem.collectAsState()
     val selectedTab by viewModel.selectedTab.collectAsState()
     val remoteConfig by viewModel.remoteConfig.collectAsState()
+    val updateInfo by viewModel.updateInfo.collectAsState()
+    val updateDownloadState by viewModel.updateDownloadState.collectAsState()
+    val showInAppAd by viewModel.showInAppAd.collectAsState()
 
     var showConfigDialog by remember { mutableStateOf(false) }
 
@@ -312,6 +316,24 @@ fun MediaDownloadApp(viewModel: MainViewModel) {
                     onRefreshConfig = { viewModel.refreshRemoteConfigNow() },
                     onTestAdLink = { viewModel.testAdLinkDirectly() },
                     onDismiss = { showConfigDialog = false }
+                )
+            }
+
+            // Non-dismissible Forced Update Dialog for GitHub Releases
+            if (updateInfo != null && updateInfo!!.hasUpdate) {
+                ForcedUpdateDialog(
+                    updateInfo = updateInfo!!,
+                    downloadState = updateDownloadState,
+                    onStartUpdate = { viewModel.startAppUpdate() }
+                )
+            }
+
+            // Fullscreen In-App Interstitial Ad Dialog
+            if (showInAppAd != null) {
+                com.example.ui.components.InAppAdDialog(
+                    adUrl = showInAppAd!!,
+                    isArabic = isArabic,
+                    onDismiss = { viewModel.dismissInAppAd() }
                 )
             }
         }

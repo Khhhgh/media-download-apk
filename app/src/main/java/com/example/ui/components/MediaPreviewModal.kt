@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.HighQuality
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
@@ -251,7 +252,50 @@ fun MediaPreviewModal(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                if (media.qualityOptions.isNotEmpty()) {
+                if (media.photoUrls.isNotEmpty()) {
+                    // Specialized Photo Album Layout
+                    QualityButton(
+                        option = QualityOption(
+                            label = if (isArabic) "تحميل جميع الصور (${media.photoUrls.size} صورة JPG)"
+                            else "Download All Photos (${media.photoUrls.size} JPG)",
+                            url = media.photoUrls.first(),
+                            format = "jpg",
+                            isHd = true
+                        ),
+                        isArabic = isArabic,
+                        onClick = {
+                            onDownloadQuality(
+                                QualityOption(
+                                    label = "Download All Photos",
+                                    url = media.photoUrls.first(),
+                                    format = "jpg",
+                                    isHd = true
+                                )
+                            )
+                        }
+                    )
+
+                    if (!media.audioUrl.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        QualityButton(
+                            option = QualityOption(
+                                label = if (isArabic) "تحميل الصوت فقط (MP3)" else "Download Audio Only (MP3)",
+                                url = media.audioUrl,
+                                format = "mp3"
+                            ),
+                            isArabic = isArabic,
+                            onClick = {
+                                onDownloadQuality(
+                                    QualityOption(
+                                        label = "Audio Only",
+                                        url = media.audioUrl,
+                                        format = "mp3"
+                                    )
+                                )
+                            }
+                        )
+                    }
+                } else if (media.qualityOptions.isNotEmpty()) {
                     media.qualityOptions.forEach { opt ->
                         QualityButton(
                             option = opt,
@@ -273,7 +317,7 @@ fun MediaPreviewModal(
                     )
                 }
 
-                if (!media.audioUrl.isNullOrBlank()) {
+                if (media.photoUrls.isEmpty() && !media.audioUrl.isNullOrBlank()) {
                     Spacer(modifier = Modifier.height(4.dp))
                     QualityButton(
                         option = QualityOption(
@@ -319,10 +363,20 @@ private fun QualityButton(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                val isImage = option.format in listOf("jpg", "jpeg", "png", "webp")
+                val isAudio = option.format == "mp3"
                 Icon(
-                    imageVector = if (option.format == "mp3") Icons.Default.Audiotrack else Icons.Default.HighQuality,
+                    imageVector = when {
+                        isAudio -> Icons.Default.Audiotrack
+                        isImage -> Icons.Default.Image
+                        else -> Icons.Default.HighQuality
+                    },
                     contentDescription = null,
-                    tint = if (option.format == "mp3") Color(0xFFFF9800) else NeonCyan,
+                    tint = when {
+                        isAudio -> Color(0xFFFF9800)
+                        isImage -> Color(0xFF00E676)
+                        else -> NeonCyan
+                    },
                     modifier = Modifier.size(20.dp)
                 )
                 Spacer(modifier = Modifier.width(10.dp))

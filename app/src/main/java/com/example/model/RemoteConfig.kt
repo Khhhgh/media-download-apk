@@ -1,8 +1,10 @@
 package com.example.model
 
+import androidx.annotation.Keep
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
 
+@Keep
 @JsonClass(generateAdapter = true)
 data class AdSettings(
     @param:Json(name = "url") @get:Json(name = "url") val url: String = "https://asiafilm.org/4/f89ce863226eeb82a6e8daabbe6fd6ce",
@@ -10,6 +12,7 @@ data class AdSettings(
     @param:Json(name = "enabled") @get:Json(name = "enabled") val enabled: Boolean = true
 )
 
+@Keep
 @JsonClass(generateAdapter = true)
 data class EngineConfig(
     @param:Json(name = "regex") @get:Json(name = "regex") val regex: String = "",
@@ -17,6 +20,7 @@ data class EngineConfig(
     @param:Json(name = "fallback_api") @get:Json(name = "fallback_api") val fallbackApi: String = ""
 )
 
+@Keep
 @JsonClass(generateAdapter = true)
 data class RemoteConfigData(
     @param:Json(name = "version") @get:Json(name = "version") val version: Int = 1,

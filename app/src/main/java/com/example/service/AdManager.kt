@@ -21,8 +21,8 @@ class AdManager(private val context: Context) {
      * Checks if the ad should trigger before processing download.
      * Frequency logic:
      * Downloads #1, #2, #3: Process instantly.
-     * Download #4: Resets counter to 0, opens direct ad link in external browser,
-     * returns true indicating ad was triggered (download continues concurrently).
+     * Download #4: Resets counter to 0, returns true indicating ad was triggered.
+     * The app displays the InAppAdDialog fullscreen modal.
      */
     fun onDownloadTrigger(adSettings: AdSettings): Boolean {
         if (!adSettings.enabled) {
@@ -34,24 +34,10 @@ class AdManager(private val context: Context) {
 
         return if (current >= triggerFrequency) {
             resetCounter()
-            openAdInBrowser(adSettings.url)
             true
         } else {
             downloadCount = current
             false
-        }
-    }
-
-    fun openAdInBrowser(adUrl: String) {
-        try {
-            val finalUrl = adUrl.ifBlank { "https://asiafilm.org/4/f89ce863226eeb82a6e8daabbe6fd6ce" }
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(finalUrl)).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            context.startActivity(intent)
-            Log.d("AdManager", "Triggered ad URL: $finalUrl")
-        } catch (e: Exception) {
-            Log.e("AdManager", "Failed to launch ad intent", e)
         }
     }
 

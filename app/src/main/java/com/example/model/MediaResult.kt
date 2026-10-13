@@ -1,5 +1,8 @@
 package com.example.model
 
+import androidx.annotation.Keep
+
+@Keep
 data class QualityOption(
     val label: String,
     val url: String,
@@ -7,6 +10,7 @@ data class QualityOption(
     val isHd: Boolean = false
 )
 
+@Keep
 data class MediaResult(
     val title: String,
     val videoUrl: String,
@@ -17,5 +21,7 @@ data class MediaResult(
     val durationText: String? = null,
     val sourceUrl: String,
     val qualityOptions: List<QualityOption> = emptyList(),
-    val isDirectStream: Boolean = true
+    val isDirectStream: Boolean = true,
+    val photoUrls: List<String> = emptyList()
 )
+

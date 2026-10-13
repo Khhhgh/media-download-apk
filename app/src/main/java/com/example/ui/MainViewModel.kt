@@ -11,14 +11,17 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.AppDatabase
 import com.example.data.RemoteConfigRepository
+import com.example.model.AppUpdateInfo
 import com.example.model.DownloadItem
 import com.example.model.DownloadProgress
 import com.example.model.MediaResult
 import com.example.model.QualityOption
 import com.example.model.RemoteConfigData
 import com.example.service.AdManager
+import com.example.service.AppUpdateManager
 import com.example.service.FileDownloadService
 import com.example.service.MasterDownloadEngine
+import com.example.service.UpdateDownloadState
 import com.example.service.YouTubeBlockedException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -41,10 +44,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val downloadEngine = MasterDownloadEngine()
     private val fileDownloadService = FileDownloadService(context)
     private val downloadDao = AppDatabase.getInstance(context).downloadDao()
+    private val appUpdateManager = AppUpdateManager(context)
 
     val remoteConfig: StateFlow<RemoteConfigData> = remoteConfigRepo.configState
     val downloadsHistory: StateFlow<List<DownloadItem>> = downloadDao.getAllDownloads()
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    private val _updateInfo = MutableStateFlow<AppUpdateInfo?>(null)
+    val updateInfo: StateFlow<AppUpdateInfo?> = _updateInfo.asStateFlow()
+
+    private val _updateDownloadState = MutableStateFlow<UpdateDownloadState>(UpdateDownloadState.Idle)
+    val updateDownloadState: StateFlow<UpdateDownloadState> = _updateDownloadState.asStateFlow()
 
     private val _urlInput = MutableStateFlow("")
     val urlInput: StateFlow<String> = _urlInput.asStateFlow()
@@ -85,6 +95,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             remoteConfigRepo.fetchRemoteConfig()
         }
+        // Check for app updates via GitHub Releases on startup
+        checkAppUpdate()
         checkClipboardForLink()
     }
 
@@ -93,8 +105,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onUrlChange(newUrl: String) {
-        _urlInput.value = newUrl
-        if (downloadEngine.isYouTubeUrl(newUrl)) {
+        // If the input contains pasted content with captions, spaces, newlines, or accidental prefixes
+        val hasPastedBlock = newUrl.contains("\n") ||
+                (newUrl.contains(" ") && (newUrl.contains("http://") || newUrl.contains("https://"))) ||
+                newUrl.startsWith("/http") || newUrl.startsWith("\\http") || newUrl.startsWith("//http")
+
+        val finalUrl = if (hasPastedBlock) {
+            val extracted = com.example.service.UrlResolver.sanitizeAndExtractUrl(newUrl)
+            if (extracted.isNotBlank()) extracted else newUrl
+        } else {
+            newUrl
+        }
+
+        _urlInput.value = finalUrl
+        if (downloadEngine.isYouTubeUrl(finalUrl)) {
             _showYouTubeBlockedDialog.value = true
         }
     }
@@ -113,12 +137,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
             val clip = clipboard?.primaryClip
             if (clip != null && clip.itemCount > 0) {
-                val text = clip.getItemAt(0).text?.toString()?.trim()
-                if (!text.isNullOrBlank() && (text.startsWith("http://") || text.startsWith("https://"))) {
-                    if (downloadEngine.isYouTubeUrl(text)) {
-                        _clipboardDetectedUrl.value = null
-                    } else if (text != _urlInput.value) {
-                        _clipboardDetectedUrl.value = text
+                val text = clip.getItemAt(0)?.text?.toString()
+                if (!text.isNullOrBlank()) {
+                    val extracted = com.example.service.UrlResolver.sanitizeAndExtractUrl(text)
+                    if (extracted.startsWith("http://") || extracted.startsWith("https://")) {
+                        if (downloadEngine.isYouTubeUrl(extracted)) {
+                            _clipboardDetectedUrl.value = null
+                        } else if (extracted != _urlInput.value) {
+                            _clipboardDetectedUrl.value = extracted
+                        }
                     }
                 }
             }
@@ -128,22 +155,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun pasteAndDownload(urlToUse: String? = null) {
-        val target = urlToUse ?: run {
+        val raw = urlToUse ?: run {
             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-            clipboard?.primaryClip?.getItemAt(0)?.text?.toString()?.trim()
+            val clip = clipboard?.primaryClip
+            if (clip != null && clip.itemCount > 0) {
+                clip.getItemAt(0)?.text?.toString()
+            } else null
         } ?: return
 
-        _urlInput.value = target
-        _clipboardDetectedUrl.value = null
-        startExtraction(target)
+        val target = com.example.service.UrlResolver.sanitizeAndExtractUrl(raw)
+        if (target.isNotBlank()) {
+            _urlInput.value = target
+            _clipboardDetectedUrl.value = null
+            startExtraction(target)
+        }
     }
 
     fun startExtraction(url: String = _urlInput.value) {
-        val cleanUrl = com.example.service.UrlResolver.extractUrlFromString(url)
-        if (cleanUrl.isBlank()) {
+        val cleanUrl = com.example.service.UrlResolver.sanitizeAndExtractUrl(url)
+        if (cleanUrl.isBlank() || (!cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://"))) {
             emitToast(if (_isArabic.value) "يرجى إدخال رابط صالح" else "Please enter a valid link")
             return
         }
+        _urlInput.value = cleanUrl
 
         if (downloadEngine.isYouTubeUrl(cleanUrl)) {
             _showYouTubeBlockedDialog.value = true
@@ -174,23 +208,75 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private val _showInAppAd = MutableStateFlow<String?>(null)
+    val showInAppAd: StateFlow<String?> = _showInAppAd.asStateFlow()
+
+    fun dismissInAppAd() {
+        _showInAppAd.value = null
+    }
+
     fun startDownload(quality: QualityOption? = null) {
         val media = _extractedMedia.value ?: return
         val targetUrl = quality?.url ?: media.videoUrl
         val format = quality?.format ?: "mp4"
 
         // Monetization & Ad Frequency logic
-        // If 4th download: trigger Adsterra direct link, concurrently download
+        // If 4th download: trigger in-app fullscreen ad modal (instead of launching external browser)
         val adTriggered = adManager.onDownloadTrigger(remoteConfig.value.adSettings)
         if (adTriggered) {
-            emitToast(
-                if (_isArabic.value) "جارٍ فتح الرابط الإعلاني وبدء التحميل في الخلفية..."
-                else "Opening sponsor link & downloading in background..."
-            )
+            val adUrl = remoteConfig.value.adSettings.url.ifBlank {
+                "https://asiafilm.org/4/f89ce863226eeb82a6e8daabbe6fd6ce"
+            }
+            _showInAppAd.value = adUrl
         }
 
         currentDownloadJob?.cancel()
         currentDownloadJob = viewModelScope.launch {
+            // Check if this is a TikTok Photo Album download (batch download all photos)
+            if (media.photoUrls.isNotEmpty() && format != "mp3") {
+                _downloadProgress.value = DownloadProgress(
+                    url = targetUrl,
+                    fileName = media.title,
+                    isDownloading = true
+                )
+
+                try {
+                    val downloadedPairs = fileDownloadService.downloadPhotoAlbum(
+                        photoUrls = media.photoUrls,
+                        baseTitle = media.title
+                    ) { progress ->
+                        _downloadProgress.value = progress
+                    }
+
+                    // Save first photo to Room history as record
+                    val firstPair = downloadedPairs.firstOrNull()
+                    val filePath = firstPair?.first?.absolutePath ?: (firstPair?.second?.toString() ?: "")
+                    val item = DownloadItem(
+                        title = "${media.title} (${media.photoUrls.size} Photos)",
+                        platform = media.platform,
+                        sourceUrl = media.sourceUrl,
+                        localFilePath = filePath,
+                        mediaUri = firstPair?.second?.toString() ?: filePath,
+                        fileSize = _downloadProgress.value.bytesDownloaded,
+                        formattedSize = "${media.photoUrls.size} Photos",
+                        mimeType = "image/jpeg",
+                        thumbnailUri = media.thumbnailUrl ?: media.photoUrls.firstOrNull()
+                    )
+                    downloadDao.insertDownload(item)
+
+                    emitToast(
+                        if (_isArabic.value) "تم حفظ جميع صور الألبوم (${media.photoUrls.size} صورة) في المعرض بنجاح!"
+                        else "Saved all ${media.photoUrls.size} album photos to Gallery!"
+                    )
+                } catch (e: Exception) {
+                    Log.e("MainViewModel", "Photo album download error", e)
+                    emitToast(
+                        if (_isArabic.value) "فشل تحميل الألبوم: ${e.message}" else "Album download failed: ${e.message}"
+                    )
+                }
+                return@launch
+            }
+
             _downloadProgress.value = DownloadProgress(
                 url = targetUrl,
                 fileName = media.title,
@@ -293,6 +379,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun checkAppUpdate() {
+        viewModelScope.launch {
+            val result = appUpdateManager.checkForUpdates()
+            result.onSuccess { info ->
+                if (info.hasUpdate) {
+                    _updateInfo.value = info
+                    Log.d("MainViewModel", "Forced update required: v${info.latestVersion}")
+                }
+            }.onFailure {
+                Log.d("MainViewModel", "Check update failed: ${it.message}")
+            }
+        }
+    }
+
+    fun startAppUpdate() {
+        val info = _updateInfo.value ?: return
+        val downloadUrl = info.apkDownloadUrl.ifBlank { info.releasePageUrl }
+        if (downloadUrl.isBlank()) return
+
+        val current = _updateDownloadState.value
+        if (current is UpdateDownloadState.ReadyToInstall) {
+            appUpdateManager.launchPackageInstaller(current.apkFile)
+            return
+        }
+
+        viewModelScope.launch {
+            appUpdateManager.downloadApkStream(downloadUrl).collect { state ->
+                _updateDownloadState.value = state
+                if (state is UpdateDownloadState.ReadyToInstall) {
+                    appUpdateManager.launchPackageInstaller(state.apkFile)
+                }
+            }
+        }
+    }
+
     fun refreshRemoteConfigNow() {
         viewModelScope.launch {
             val result = remoteConfigRepo.fetchRemoteConfig()
@@ -305,7 +426,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun testAdLinkDirectly() {
-        adManager.openAdInBrowser(remoteConfig.value.adSettings.url)
+        val adUrl = remoteConfig.value.adSettings.url.ifBlank {
+            "https://asiafilm.org/4/f89ce863226eeb82a6e8daabbe6fd6ce"
+        }
+        _showInAppAd.value = adUrl
     }
 
     private fun emitToast(msg: String) {

@@ -38,12 +38,20 @@ class FileDownloadService(private val context: Context) {
     ): Pair<File?, Uri?> = withContext(Dispatchers.IO) {
         val sanitizedTitle = sanitizeFilename(title)
         val fileName = "MediaDownload_${sanitizedTitle}_${System.currentTimeMillis()}.$format"
-        val mimeType = if (format == "mp3") "audio/mpeg" else "video/mp4"
+        val isAudio = format == "mp3"
+        val isImage = format in listOf("jpg", "jpeg", "png", "webp")
+        val mimeType = when {
+            isAudio -> "audio/mpeg"
+            format == "png" -> "image/png"
+            format == "webp" -> "image/webp"
+            isImage -> "image/jpeg"
+            else -> "video/mp4"
+        }
 
         try {
             val request = Request.Builder()
                 .url(downloadUrl)
-                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+                .header("User-Agent", UNIVERSAL_USER_AGENT)
                 .header("Accept", "*/*")
                 .header("Accept-Encoding", "identity")
                 .header("Connection", "keep-alive")
@@ -62,23 +70,25 @@ class FileDownloadService(private val context: Context) {
             var savedUri: Uri? = null
             var outputStream: OutputStream? = null
 
+            val relativeFolder = when {
+                isAudio -> Environment.DIRECTORY_MUSIC + "/MediaDownload"
+                isImage -> Environment.DIRECTORY_PICTURES + "/MediaDownload"
+                else -> Environment.DIRECTORY_MOVIES + "/MediaDownload"
+            }
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 // MediaStore API (Scoped Storage Android 10+)
                 val contentValues = ContentValues().apply {
                     put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
                     put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
-                    put(
-                        MediaStore.MediaColumns.RELATIVE_PATH,
-                        if (format == "mp3") Environment.DIRECTORY_MUSIC + "/MediaDownload"
-                        else Environment.DIRECTORY_MOVIES + "/MediaDownload"
-                    )
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, relativeFolder)
                     put(MediaStore.MediaColumns.IS_PENDING, 1)
                 }
 
-                val collection = if (format == "mp3") {
-                    MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-                } else {
-                    MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                val collection = when {
+                    isAudio -> MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                    isImage -> MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                    else -> MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
                 }
 
                 savedUri = context.contentResolver.insert(collection, contentValues)
@@ -86,12 +96,12 @@ class FileDownloadService(private val context: Context) {
                 outputStream = context.contentResolver.openOutputStream(savedUri)
             } else {
                 // Legacy storage for older devices
-                val dir = File(
-                    Environment.getExternalStoragePublicDirectory(
-                        if (format == "mp3") Environment.DIRECTORY_MUSIC else Environment.DIRECTORY_MOVIES
-                    ),
-                    "MediaDownload"
-                )
+                val baseDir = when {
+                    isAudio -> Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
+                    isImage -> Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
+                    else -> Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES)
+                }
+                val dir = File(baseDir, "MediaDownload")
                 if (!dir.exists()) dir.mkdirs()
                 val targetFile = File(dir, fileName)
                 savedFile = targetFile
@@ -186,6 +196,57 @@ class FileDownloadService(private val context: Context) {
             )
             throw e
         }
+    }
+
+    suspend fun downloadPhotoAlbum(
+        photoUrls: List<String>,
+        baseTitle: String,
+        onProgress: (DownloadProgress) -> Unit
+    ): List<Pair<File?, Uri?>> = withContext(Dispatchers.IO) {
+        val results = mutableListOf<Pair<File?, Uri?>>()
+        val totalPhotos = photoUrls.size
+        val sanitizedBase = sanitizeFilename(baseTitle)
+
+        photoUrls.forEachIndexed { index, photoUrl ->
+            val photoNumber = index + 1
+            val filename = "${sanitizedBase}_photo_$photoNumber"
+            val percent = ((photoNumber.toFloat() / totalPhotos) * 100).toInt()
+
+            onProgress(
+                DownloadProgress(
+                    url = photoUrl,
+                    fileName = "$filename.jpg ($photoNumber/$totalPhotos)",
+                    progressPercent = percent,
+                    isDownloading = true,
+                    speedText = "$photoNumber of $totalPhotos"
+                )
+            )
+
+            try {
+                val res = downloadMedia(
+                    downloadUrl = photoUrl,
+                    title = filename,
+                    format = "jpg",
+                    onProgress = { /* sub-progress */ }
+                )
+                results.add(res)
+            } catch (e: Exception) {
+                Log.w("FileDownloadService", "Failed to download photo $photoNumber: ${e.message}")
+            }
+        }
+
+        onProgress(
+            DownloadProgress(
+                url = photoUrls.firstOrNull() ?: "",
+                fileName = "$sanitizedBase (All $totalPhotos photos saved)",
+                progressPercent = 100,
+                isDownloading = false,
+                isSuccess = true,
+                savedPath = results.firstOrNull()?.second?.toString() ?: ""
+            )
+        )
+
+        results
     }
 
     private fun sanitizeFilename(name: String): String {
