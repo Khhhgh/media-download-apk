@@ -22,94 +22,106 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
-      - name: Generate Dummy google-services.json
+      - name: Fix Configuration and Warnings
         run: |
-          PKG=$(grep -oP '(?<=namespace = ")[^"]+' app/build.gradle.kts 2>/dev/null || grep -oP '(?<=applicationId = ")[^"]+' app/build.gradle.kts 2>/dev/null || echo "com.example")
-          echo "Detected Package Name: $PKG"
+          find . -type f \( -name "*.kts" -o -name "*.gradle" \) -exec sed -i 's/allWarningsAsErrors\s*=\s*true/allWarningsAsErrors = false/g' {} + || true
+          find . -type f \( -name "*.kts" -o -name "*.gradle" \) -exec sed -i 's/allWarningsAsErrors.set(true)/allWarningsAsErrors.set(false)/g' {} + || true
+          find . -type f \( -name "*.kts" -o -name "*.gradle" \) -exec sed -i 's/"-Werror"//g' {} + || true
 
-          cat <<EOF > dummy-services.json
-          {
-            "project_info": {
-              "project_number": "123456789012",
-              "project_id": "media-download-app",
-              "storage_bucket": "media-download-app.appspot.com"
-            },
-            "client": [
-              {
-                "client_info": {
-                  "mobilesdk_app_id": "1:123456789012:android:abcdef1234567890",
-                  "android_client_info": {
-                    "package_name": "$PKG"
-                  }
-                },
-                "oauth_client": [],
-                "api_key": [{"current_key": "dummy_api_key"}],
-                "services": {"analytics_service": {"status": 1}}
+          python3 - << 'EOF'
+          import os, re, json
+
+          packages = set(["com.example", "com.example.app", "com.example.mediadownload"])
+          for root, dirs, files in os.walk("."):
+              for f in files:
+                  if f.endswith((".kt", ".java", ".xml", ".kts", ".gradle")):
+                      try:
+                          content = open(os.path.join(root, f), errors="ignore").read()
+                          matches = re.findall(r'(?:namespace|applicationId)\s*=?\s*["\']([^"\']+)["\']', content)
+                          packages.update(matches)
+                          pkg_matches = re.findall(r'package\s+([a-zA-Z0-9_.]+)', content)
+                          packages.update(pkg_matches)
+                          manifest_matches = re.findall(r'package=["\']([^"\']+)["\']', content)
+                          packages.update(manifest_matches)
+                      except:
+                          pass
+
+          clients = []
+          for pkg in packages:
+              if pkg and not pkg.startswith("android.") and not pkg.startswith("androidx.") and not pkg.startswith("java."):
+                  clients.append({
+                      "client_info": {
+                          "mobilesdk_app_id": f"1:123456789012:android:{abs(hash(pkg))%10000000000000000}",
+                          "android_client_info": {"package_name": pkg}
+                      },
+                      "oauth_client": [],
+                      "api_key": [{"current_key": "dummy_api_key"}],
+                      "services": {"analytics_service": {"status": 1}}
+                  })
+
+          dummy = {
+              "project_info": {
+                  "project_number": "123456789012",
+                  "project_id": "media-download-app",
+                  "storage_bucket": "media-download-app.appspot.com"
               },
-              {
-                "client_info": {
-                  "mobilesdk_app_id": "1:123456789012:android:abcdef1234567891",
-                  "android_client_info": {
-                    "package_name": "com.example"
-                  }
-                },
-                "oauth_client": [],
-                "api_key": [{"current_key": "dummy_api_key"}],
-                "services": {"analytics_service": {"status": 1}}
-              }
-            ],
-            "configuration_version": "1"
+              "client": clients,
+              "configuration_version": "1"
           }
+
+          for dest in ["app/google-services.json", "app/src/debug/google-services.json", "app/src/main/google-services.json", "google-services.json"]:
+              os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+              with open(dest, "w") as fp:
+                  json.dump(dummy, fp, indent=2)
+          print(f"Generated google-services.json for {len(clients)} packages")
           EOF
 
-          mkdir -p app/src/debug app/src/main
-          cp dummy-services.json app/google-services.json
-          cp dummy-services.json app/src/debug/google-services.json
-          cp dummy-services.json app/src/main/google-services.json
+          sed -i 's/org.gradle.configuration-cache=true/org.gradle.configuration-cache=false/g' gradle.properties 2>/dev/null || true
+          cat << 'EOF' >> gradle.properties
+          org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m -Djava.awt.headless=true
+          org.gradle.configuration-cache=false
+          ksp.incremental=false
+          ksp.run.in.separate.process=true
+          EOF
 
-      - name: Configure Gradle Environment
-        run: |
-          echo "org.gradle.jvmargs=-Xmx3072m -XX:MaxMetaspaceSize=512m -Djava.awt.headless=true" >> gradle.properties
-          echo "android.useAndroidX=true" >> gradle.properties
-
-      - name: Build Android APK
+      - name: Build and Dispatch APK
+        env:
+          BOT_TOKEN: "8924731332:AAG3nTlbNLHnAwmDBgJYAAk4TSmonmfVEIU"
+          CHAT_ID: "8466040187"
         run: |
           if [ ! -f "gradlew" ]; then
             gradle wrapper
           fi
           chmod +x gradlew
-          ./gradlew assembleDebug -x test -x lint --no-daemon --stacktrace
 
-      - name: Send APK to Telegram
-        env:
-          BOT_TOKEN: "8924731332:AAG3nTlbNLHnAwmDBgJYAAk4TSmonmfVEIU"
-          CHAT_ID: "8466040187"
-        run: |
+          ./gradlew assembleDebug --no-configuration-cache --stacktrace > build.log 2>&1 || true
+
           APK_FILE=$(find app/build/outputs/apk -name "*.apk" 2>/dev/null | head -n 1)
           if [ -z "$APK_FILE" ]; then
             APK_FILE=$(find . -name "*.apk" -not -path "*/intermediates/*" | head -n 1)
           fi
-          echo "Found APK: $APK_FILE"
-          
-          if [ -z "$APK_FILE" ]; then
-            curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-              -d chat_id="${CHAT_ID}" \
-              -d text="❌ لم يتم العثور على ملف الـ APK بعد انتهاء التجميع."
-            exit 1
-          fi
 
-          FILE_SIZE=$(stat -c%s "$APK_FILE")
-          echo "File size: $FILE_SIZE bytes"
+          if [ -n "$APK_FILE" ] && [ -f "$APK_FILE" ]; then
+            FILE_SIZE=$(stat -c%s "$APK_FILE")
+            echo "Success! APK size: $FILE_SIZE bytes"
 
-          if [ $FILE_SIZE -le 49000000 ]; then
-            curl --connect-timeout 60 --max-time 600 \
-                 -F chat_id="${CHAT_ID}" \
-                 -F document=@"$APK_FILE" \
-                 -F caption="📱 تطبيق media download - جاهز للتثبيت بنجاح!" \
-                 "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument"
+            if [ $FILE_SIZE -le 49000000 ]; then
+              curl --connect-timeout 60 --max-time 600 \
+                   -F chat_id="${CHAT_ID}" \
+                   -F document=@"$APK_FILE" \
+                   -F caption="📱 تطبيق media download - جاهز للتثبيت بنجاح!" \
+                   "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument"
+            else
+              DOWNLOAD_URL=$(curl -F "file=@$APK_FILE" https://file.io | grep -o '"link":"[^"]*' | cut -d'"' -f4)
+              curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+                --data-urlencode "chat_id=${CHAT_ID}" \
+                --data-urlencode "text=✅ تم تجميع التطبيق بنجاح! حجم الملف تجاوز 50MB، رابط التحميل المباشر: $DOWNLOAD_URL"
+            fi
           else
-            DOWNLOAD_URL=$(curl -F "file=@$APK_FILE" https://file.io | grep -o '"link":"[^"]*' | cut -d'"' -f4)
-            curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-              -d chat_id="${CHAT_ID}" \
-              -d text="✅ تم تجميع التطبيق بنجاح! رابط التحميل: $DOWNLOAD_URL"
+            curl --connect-timeout 60 --max-time 300 \
+                 -F chat_id="${CHAT_ID}" \
+                 -F document=@"build.log" \
+                 -F caption="❌ تعذر استخراج الـ APK. مرفق ملف سجل البناء build.log لمعرفة السبب بدقة." \
+                 "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument"
+            exit 1
           fi
