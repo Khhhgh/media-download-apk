@@ -1,0 +1,21 @@
+package com.example.model
+
+data class QualityOption(
+    val label: String,
+    val url: String,
+    val format: String = "mp4",
+    val isHd: Boolean = false
+)
+
+data class MediaResult(
+    val title: String,
+    val videoUrl: String,
+    val audioUrl: String? = null,
+    val thumbnailUrl: String? = null,
+    val platform: String,
+    val author: String? = null,
+    val durationText: String? = null,
+    val sourceUrl: String,
+    val qualityOptions: List<QualityOption> = emptyList(),
+    val isDirectStream: Boolean = true
+)
