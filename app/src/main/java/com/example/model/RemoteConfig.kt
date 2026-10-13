@@ -5,21 +5,21 @@ import com.squareup.moshi.JsonClass
 
 @JsonClass(generateAdapter = true)
 data class AdSettings(
-    @Json(name = "url") val url: String = "https://asiafilm.org/4/f89ce863226eeb82a6e8daabbe6fd6ce",
-    @Json(name = "trigger_frequency") val triggerFrequency: Int = 3,
-    @Json(name = "enabled") val enabled: Boolean = true
+    @param:Json(name = "url") @get:Json(name = "url") val url: String = "https://asiafilm.org/4/f89ce863226eeb82a6e8daabbe6fd6ce",
+    @param:Json(name = "trigger_frequency") @get:Json(name = "trigger_frequency") val triggerFrequency: Int = 3,
+    @param:Json(name = "enabled") @get:Json(name = "enabled") val enabled: Boolean = true
 )
 
 @JsonClass(generateAdapter = true)
 data class EngineConfig(
-    @Json(name = "regex") val regex: String = "",
-    @Json(name = "primary_api") val primaryApi: String = "",
-    @Json(name = "fallback_api") val fallbackApi: String = ""
+    @param:Json(name = "regex") @get:Json(name = "regex") val regex: String = "",
+    @param:Json(name = "primary_api") @get:Json(name = "primary_api") val primaryApi: String = "",
+    @param:Json(name = "fallback_api") @get:Json(name = "fallback_api") val fallbackApi: String = ""
 )
 
 @JsonClass(generateAdapter = true)
 data class RemoteConfigData(
-    @Json(name = "version") val version: Int = 1,
-    @Json(name = "ad_settings") val adSettings: AdSettings = AdSettings(),
-    @Json(name = "engines") val engines: Map<String, EngineConfig> = emptyMap()
+    @param:Json(name = "version") @get:Json(name = "version") val version: Int = 1,
+    @param:Json(name = "ad_settings") @get:Json(name = "ad_settings") val adSettings: AdSettings = AdSettings(),
+    @param:Json(name = "engines") @get:Json(name = "engines") val engines: Map<String, EngineConfig> = emptyMap()
 )
