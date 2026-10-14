@@ -67,7 +67,7 @@ fun AppHeader(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                // Left: Version Badge v1.0.7
+                // Left: Version Badge v1.0.8
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))
@@ -77,7 +77,7 @@ fun AppHeader(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "v${BuildConfig.VERSION_NAME.ifBlank { "1.0.7" }}",
+                        text = "v${BuildConfig.VERSION_NAME.ifBlank { "1.0.8" }}",
                         color = HeaderCyanBorder,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,

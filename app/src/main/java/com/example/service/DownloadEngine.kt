@@ -109,10 +109,15 @@ object UrlResolver {
                 cleanBase
             } else if (url.contains("pinterest.", ignoreCase = true) && url.contains("/pin/")) {
                 cleanBase
+            } else if (url.contains("instagram.com", ignoreCase = true) || url.contains("instagr.am", ignoreCase = true)) {
+                url.replace(Regex("[?&](igsh|igshid|utm_[^&=]+|fbclid)=[^&#]*", RegexOption.IGNORE_CASE), "")
+                    .replace(Regex("\\?&"), "?")
+                    .trimEnd('?', '&')
             } else if (qIndex != -1 && (url.contains("utm_", ignoreCase = true) ||
                         url.contains("is_from_webapp", ignoreCase = true) ||
                         url.contains("fbclid", ignoreCase = true) ||
-                        url.contains("igshid", ignoreCase = true))) {
+                        url.contains("igshid", ignoreCase = true) ||
+                        url.contains("igsh", ignoreCase = true))) {
                 cleanBase
             } else {
                 url
@@ -692,7 +697,7 @@ class InstagramDownloader(
     }
 
     fun extractShortcode(url: String): String? {
-        val matcher = Pattern.compile("/(?:p|reel|reels|share|tv)/([A-Za-z0-9_-]+)", Pattern.CASE_INSENSITIVE).matcher(url)
+        val matcher = Pattern.compile("/(?:share/reel|share/p|p|reel|reels|share|tv)/([A-Za-z0-9_-]+)", Pattern.CASE_INSENSITIVE).matcher(url)
         if (matcher.find()) return matcher.group(1)
         val direct = Pattern.compile("^[A-Za-z0-9_-]{9,15}$").matcher(url.trim())
         if (direct.find()) return direct.group(0)
@@ -701,7 +706,7 @@ class InstagramDownloader(
 
     private fun isReelUrl(url: String): Boolean {
         val lower = url.lowercase()
-        return lower.contains("/reel/") || lower.contains("/reels/") || lower.contains("/tv/")
+        return lower.contains("/reel/") || lower.contains("/reels/") || lower.contains("/tv/") || lower.contains("/share/reel/")
     }
 
     private fun cleanEscaped(raw: String): String = raw
@@ -1972,9 +1977,89 @@ class CobaltDownloader(private val client: OkHttpClient) : BaseDownloaderEngine(
         val bodyString = response.body?.string() ?: ""
         val json = JSONObject(bodyString)
         val status = json.optString("status", "")
+        val videoUrl = json.optString("url", "")
+        val pickerArray = json.optJSONArray("picker")
+        val hasPicker = pickerArray != null && pickerArray.length() > 0
 
-        if (status == "tunnel" || status == "redirect" || status == "success") {
-            val videoUrl = json.optString("url", "")
+        // Handle multi-item album / carousel picker response from Cobalt API
+        if (hasPicker && (status == "picker" || videoUrl.isBlank())) {
+            val picker = pickerArray!!
+            val carouselList = mutableListOf<CarouselItem>()
+            val imageUrls = mutableListOf<String>()
+            val videoUrls = mutableListOf<String>()
+
+            for (i in 0 until picker.length()) {
+                val pItem = picker.optJSONObject(i) ?: continue
+                val itemUrl = pItem.optString("url", "")
+                if (itemUrl.isBlank()) continue
+                val pType = pItem.optString("type", "").lowercase()
+                val isVideo = pType == "video" || itemUrl.contains(".mp4") || itemUrl.contains("/v/")
+                val format = if (isVideo) "mp4" else "jpg"
+                if (isVideo) videoUrls.add(itemUrl) else imageUrls.add(itemUrl)
+                carouselList.add(
+                    CarouselItem(
+                        url = itemUrl,
+                        format = format,
+                        label = "Slide ${i + 1} (${if (isVideo) "Video" else "Photo"})",
+                        isHd = true
+                    )
+                )
+            }
+
+            if (carouselList.isNotEmpty()) {
+                val primary = videoUrls.firstOrNull() ?: imageUrls.firstOrNull() ?: carouselList.first().url
+                val qualities = mutableListOf<QualityOption>()
+
+                if (carouselList.size > 1) {
+                    qualities.add(
+                        QualityOption(
+                            label = "Download All Slides (${carouselList.size})",
+                            url = carouselList.first().url,
+                            format = "carousel",
+                            isHd = true
+                        )
+                    )
+                }
+
+                if (videoUrls.isNotEmpty()) {
+                    qualities.add(
+                        QualityOption(
+                            label = "Highest Quality Video (MP4)",
+                            url = videoUrls.first(),
+                            format = "mp4",
+                            isHd = true
+                        )
+                    )
+                }
+
+                if (imageUrls.isNotEmpty()) {
+                    qualities.add(
+                        QualityOption(
+                            label = "Download All Photos (${imageUrls.size} JPG)",
+                            url = imageUrls.first(),
+                            format = "jpg",
+                            isHd = true
+                        )
+                    )
+                }
+
+                val firstThumb = picker.optJSONObject(0)?.optString("thumb", "")?.ifBlank { null }
+                    ?: imageUrls.firstOrNull() ?: videoUrls.firstOrNull()
+
+                return@withContext MediaResult(
+                    title = "$platform Media",
+                    videoUrl = primary,
+                    thumbnailUrl = firstThumb,
+                    platform = platform,
+                    sourceUrl = url,
+                    qualityOptions = qualities,
+                    photoUrls = imageUrls,
+                    carouselItems = carouselList
+                )
+            }
+        }
+
+        if (status == "tunnel" || status == "redirect" || status == "success" || videoUrl.isNotBlank()) {
             val audioUrl = json.optString("audio", "")
             val filename = json.optString("filename", "$platform Media")
 
@@ -2000,86 +2085,16 @@ class CobaltDownloader(private val client: OkHttpClient) : BaseDownloaderEngine(
                             format = format,
                             isHd = true
                         )
-                    )
-                )
-            }
-        } else if (status == "picker" && json.has("picker")) {
-            val picker = json.getJSONArray("picker")
-            if (picker.length() > 0) {
-                val carouselList = mutableListOf<CarouselItem>()
-                val imageUrls = mutableListOf<String>()
-                val videoUrls = mutableListOf<String>()
-
-                for (i in 0 until picker.length()) {
-                    val pItem = picker.optJSONObject(i) ?: continue
-                    val itemUrl = pItem.optString("url", "")
-                    if (itemUrl.isBlank()) continue
-                    val pType = pItem.optString("type", "").lowercase()
-                    val isVideo = pType == "video" || itemUrl.contains(".mp4") || itemUrl.contains("/v/")
-                    val format = if (isVideo) "mp4" else "jpg"
-                    if (isVideo) videoUrls.add(itemUrl) else imageUrls.add(itemUrl)
-                    carouselList.add(
+                    ),
+                    carouselItems = listOf(
                         CarouselItem(
-                            url = itemUrl,
+                            url = videoUrl,
                             format = format,
-                            label = "Slide ${i + 1} (${if (isVideo) "Video" else "Photo"})",
+                            label = if (isImage) "Image" else "Video",
                             isHd = true
                         )
                     )
-                }
-
-                if (carouselList.isNotEmpty()) {
-                    val primary = videoUrls.firstOrNull() ?: imageUrls.firstOrNull() ?: carouselList.first().url
-                    val isFirstVideo = primary == videoUrls.firstOrNull()
-                    val qualities = mutableListOf<QualityOption>()
-
-                    if (carouselList.size > 1) {
-                        qualities.add(
-                            QualityOption(
-                                label = "Download All Slides (${carouselList.size})",
-                                url = carouselList.first().url,
-                                format = "carousel",
-                                isHd = true
-                            )
-                        )
-                    }
-
-                    if (videoUrls.isNotEmpty()) {
-                        qualities.add(
-                            QualityOption(
-                                label = "Highest Quality Video (MP4)",
-                                url = videoUrls.first(),
-                                format = "mp4",
-                                isHd = true
-                            )
-                        )
-                    }
-
-                    if (imageUrls.isNotEmpty()) {
-                        qualities.add(
-                            QualityOption(
-                                label = "Download All Photos (${imageUrls.size} JPG)",
-                                url = imageUrls.first(),
-                                format = "jpg",
-                                isHd = true
-                            )
-                        )
-                    }
-
-                    val firstThumb = picker.optJSONObject(0)?.optString("thumb", "")?.ifBlank { null }
-                        ?: imageUrls.firstOrNull() ?: videoUrls.firstOrNull()
-
-                    return@withContext MediaResult(
-                        title = "$platform Media",
-                        videoUrl = primary,
-                        thumbnailUrl = firstThumb,
-                        platform = platform,
-                        sourceUrl = url,
-                        qualityOptions = qualities,
-                        photoUrls = imageUrls,
-                        carouselItems = carouselList
-                    )
-                }
+                )
             }
         }
 

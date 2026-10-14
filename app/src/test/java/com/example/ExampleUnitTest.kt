@@ -90,7 +90,7 @@ class ExampleUnitTest {
         assertTrue(reelPattern.matcher("https://www.instagram.com/tv/C8qV186s83l/").find())
         assertFalse(reelPattern.matcher("https://www.instagram.com/p/C8qV186s83l/").find())
 
-        val anyPostPattern = Pattern.compile("/(?:p|reel|reels|share|tv)/([A-Za-z0-9_-]+)", Pattern.CASE_INSENSITIVE)
+        val anyPostPattern = Pattern.compile("/(?:share/reel|share/p|p|reel|reels|share|tv)/([A-Za-z0-9_-]+)", Pattern.CASE_INSENSITIVE)
         val m = anyPostPattern.matcher("https://www.instagram.com/reel/C8qV186s83l/?igsh=xyz")
         assertTrue(m.find())
         assertEquals("C8qV186s83l", m.group(1))
@@ -98,5 +98,13 @@ class ExampleUnitTest {
         val shareMatcher = anyPostPattern.matcher("https://www.instagram.com/share/C8qV186s83l/?utm_source=ig_web_copy_link")
         assertTrue(shareMatcher.find())
         assertEquals("C8qV186s83l", shareMatcher.group(1))
+
+        val shareReelMatcher = anyPostPattern.matcher("https://www.instagram.com/share/reel/C8qV186s83l/?igsh=xyz123")
+        assertTrue(shareReelMatcher.find())
+        assertEquals("C8qV186s83l", shareReelMatcher.group(1))
+
+        val sharePMatcher = anyPostPattern.matcher("https://www.instagram.com/share/p/C8qV186s83l/?igsh=abc")
+        assertTrue(sharePMatcher.find())
+        assertEquals("C8qV186s83l", sharePMatcher.group(1))
     }
 }
