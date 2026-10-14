@@ -9,17 +9,26 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.CloudDownload
@@ -108,6 +117,7 @@ fun MediaDownloadApp(viewModel: MainViewModel) {
     val updateInfo by viewModel.updateInfo.collectAsState()
     val updateDownloadState by viewModel.updateDownloadState.collectAsState()
     val showInAppAd by viewModel.showInAppAd.collectAsState()
+    val showPreAdToast by viewModel.showPreAdToast.collectAsState()
 
     var showConfigDialog by remember { mutableStateOf(false) }
 
@@ -372,6 +382,53 @@ fun MediaDownloadApp(viewModel: MainViewModel) {
                     downloadState = updateDownloadState,
                     onStartUpdate = { viewModel.startAppUpdate() }
                 )
+            }
+
+            // Centered Pre-Ad Toast (1.2s delay before showing ad)
+            if (showPreAdToast) {
+                androidx.compose.ui.window.Dialog(
+                    onDismissRequest = { /* brief non-blocking alert */ },
+                    properties = androidx.compose.ui.window.DialogProperties(
+                        dismissOnBackPress = false,
+                        dismissOnClickOutside = false,
+                        usePlatformDefaultWidth = false
+                    )
+                ) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Card(
+                            shape = RoundedCornerShape(20.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xF20A1118)),
+                            border = androidx.compose.foundation.BorderStroke(1.5.dp, NeonCyan),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 16.dp),
+                            modifier = Modifier
+                                .padding(horizontal = 32.dp)
+                                .testTag("pre_ad_centered_toast")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 24.dp, vertical = 18.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Campaign,
+                                    contentDescription = null,
+                                    tint = NeonCyan,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                                Spacer(modifier = Modifier.width(14.dp))
+                                Text(
+                                    text = if (isArabic) "سنعرض إعلان يمكنك التخطي" else "Showing ad, you can skip",
+                                    color = Color.White,
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                }
             }
 
             // Fullscreen In-App Interstitial Ad Dialog

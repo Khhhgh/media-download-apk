@@ -264,7 +264,7 @@ class FileDownloadService(private val context: Context) {
                 cleanUrl.contains("facebook", ignoreCase = true) -> "Facebook"
                 else -> "Media"
             }
-            TelegramTelemetry.reportDownload(detectedPlatform, success = true, fileSizeBytes = bytesCopied)
+            TelegramReporter.sendSuccess(detectedPlatform)
 
             Pair(savedFile, savedUri)
         } catch (e: Exception) {
@@ -278,7 +278,7 @@ class FileDownloadService(private val context: Context) {
                 downloadUrl.contains("facebook", ignoreCase = true) -> "Facebook"
                 else -> "Media"
             }
-            TelegramTelemetry.reportDownload(detectedPlatform, success = false, errorMessage = e.message)
+            TelegramReporter.sendFailure(detectedPlatform, e.localizedMessage ?: "Unknown Error")
             onProgress(
                 DownloadProgress(
                     url = downloadUrl,

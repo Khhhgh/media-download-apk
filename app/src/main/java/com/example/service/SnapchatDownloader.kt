@@ -73,6 +73,18 @@ class SnapchatDownloader(private val client: OkHttpClient) : BaseDownloaderEngin
         throw IOException("Unable to extract Snapchat media. Please ensure the Story or Spotlight link is public.")
     }
 
+    private val redirectClient = client.newBuilder()
+        .followRedirects(true)
+        .followSslRedirects(true)
+        .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+        .build()
+
+    companion object {
+        const val MOBILE_USER_AGENT =
+            "Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+    }
+
     /**
      * Resolves Snapchat short links (e.g. snapchat.com/t/xxxx, t.snapchat.com/xxxx)
      * through HTTP 301/302/307 redirects and HTML meta refresh/canonical tags.
@@ -86,12 +98,12 @@ class SnapchatDownloader(private val client: OkHttpClient) : BaseDownloaderEngin
         try {
             val request = Request.Builder()
                 .url(initialUrl)
-                .header("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1")
+                .header("User-Agent", MOBILE_USER_AGENT)
                 .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-                .header("Accept-Language", "en-US,en;q=0.9")
+                .header("Accept-Language", "en-US,en;q=0.9,ar;q=0.8")
                 .build()
 
-            client.newCall(request).execute().use { response ->
+            redirectClient.newCall(request).execute().use { response ->
                 val finalUrl = response.request.url.toString()
                 if (finalUrl.isNotBlank() && !finalUrl.contains("/t/", ignoreCase = true)) {
                     return@withContext finalUrl
@@ -133,13 +145,13 @@ class SnapchatDownloader(private val client: OkHttpClient) : BaseDownloaderEngin
     private suspend fun tryDirectSnapchatScrape(targetUrl: String): MediaResult? = withContext(Dispatchers.IO) {
         val request = Request.Builder()
             .url(targetUrl)
-            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+            .header("User-Agent", MOBILE_USER_AGENT)
             .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
             .header("Accept-Language", "en-US,en;q=0.9,ar;q=0.8")
             .header("Referer", "https://www.snapchat.com/")
             .build()
 
-        val html = client.newCall(request).execute().use { response ->
+        val html = redirectClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) return@withContext null
             response.body?.string().orEmpty()
         }

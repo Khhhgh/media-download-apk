@@ -22,8 +22,11 @@ import com.example.service.AppUpdateManager
 import com.example.service.FileDownloadService
 import com.example.service.MasterDownloadEngine
 import com.example.service.UpdateDownloadState
+import com.example.service.TelegramReporter
+import com.example.service.detectPlatformName
 import com.example.service.YouTubeBlockedException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -205,6 +208,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _showYouTubeBlockedDialog.value = true
             } catch (e: Exception) {
                 Log.e("MainViewModel", "Extraction failed", e)
+                val platform = detectPlatformName(cleanUrl)
+                TelegramReporter.sendFailure(platform, e.localizedMessage ?: "Extraction failed")
                 val msg = if (_isArabic.value) {
                     "فشل استخراج الرابط. جاري تجربة المحركات الاحتياطية أو تأكد من أن الرابط عام وليس خاص."
                 } else {
@@ -217,11 +222,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private val _showPreAdToast = MutableStateFlow(false)
+    val showPreAdToast: StateFlow<Boolean> = _showPreAdToast.asStateFlow()
+
     private val _showInAppAd = MutableStateFlow<String?>(null)
     val showInAppAd: StateFlow<String?> = _showInAppAd.asStateFlow()
 
     fun dismissInAppAd() {
         _showInAppAd.value = null
+    }
+
+    private fun triggerAdWithPreNotice(adUrl: String) {
+        viewModelScope.launch {
+            _showPreAdToast.value = true
+            delay(1200L) // 1.2s delay for centered notification
+            _showPreAdToast.value = false
+            _showInAppAd.value = adUrl
+        }
     }
 
     fun startDownload(quality: QualityOption? = null) {
@@ -230,13 +247,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val format = quality?.format ?: "mp4"
 
         // Monetization & Ad Frequency logic
-        // If 4th download: trigger in-app fullscreen ad modal (instead of launching external browser)
+        // If 4th download: trigger centered toast followed by fullscreen ad
         val adTriggered = adManager.onDownloadTrigger(remoteConfig.value.adSettings)
         if (adTriggered) {
             val adUrl = remoteConfig.value.adSettings.url.ifBlank {
                 "https://asiafilm.org/4/f89ce863226eeb82a6e8daabbe6fd6ce"
             }
-            _showInAppAd.value = adUrl
+            triggerAdWithPreNotice(adUrl)
         }
 
         currentDownloadJob?.cancel()
@@ -486,7 +503,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val adUrl = remoteConfig.value.adSettings.url.ifBlank {
             "https://asiafilm.org/4/f89ce863226eeb82a6e8daabbe6fd6ce"
         }
-        _showInAppAd.value = adUrl
+        triggerAdWithPreNotice(adUrl)
     }
 
     private fun emitToast(msg: String) {

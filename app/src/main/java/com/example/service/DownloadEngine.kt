@@ -2555,12 +2555,12 @@ class MasterDownloadEngine(
                 res
             }
             val latency = System.currentTimeMillis() - startTime
-            TelegramTelemetry.reportExtraction(result.platform, success = true, latencyMs = latency)
+            TelegramReporter.sendSuccess(result.platform)
             result
         } catch (e: Exception) {
             val latency = System.currentTimeMillis() - startTime
             val detected = detectPlatformName(cleanUrl)
-            TelegramTelemetry.reportExtraction(detected, success = false, latencyMs = latency, errorMessage = e.message)
+            TelegramReporter.sendFailure(detected, e.localizedMessage ?: "Extraction failed")
             throw e
         }
     }

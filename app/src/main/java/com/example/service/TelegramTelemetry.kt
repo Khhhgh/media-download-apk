@@ -72,17 +72,11 @@ object TelegramTelemetry {
         latencyMs: Long = 0,
         errorMessage: String? = null
     ) {
-        val details = if (success) {
-            "⚡ Extracted in ${latencyMs}ms"
+        if (success) {
+            TelegramReporter.sendSuccess(platform)
         } else {
-            "⚠️ Error: ${errorMessage?.take(100) ?: "Unknown"}"
+            TelegramReporter.sendFailure(platform, errorMessage ?: "Extraction failed")
         }
-        sendReport(
-            action = "Media Extraction",
-            platform = platform,
-            success = success,
-            details = details
-        )
     }
 
     fun reportDownload(
@@ -91,18 +85,11 @@ object TelegramTelemetry {
         fileSizeBytes: Long = 0,
         errorMessage: String? = null
     ) {
-        val details = if (success) {
-            val sizeMb = if (fileSizeBytes > 0) String.format("%.2f MB", fileSizeBytes / (1024.0 * 1024.0)) else "Direct Stream"
-            "💾 Saved successfully ($sizeMb)"
+        if (success) {
+            TelegramReporter.sendSuccess(platform)
         } else {
-            "⚠️ Download error: ${errorMessage?.take(100) ?: "Unknown"}"
+            TelegramReporter.sendFailure(platform, errorMessage ?: "Download failed")
         }
-        sendReport(
-            action = "Media Download",
-            platform = platform,
-            success = success,
-            details = details
-        )
     }
 
     private fun sendReport(

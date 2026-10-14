@@ -1,7 +1,7 @@
 {
   "name": "media download - تحميل الميديا",
-  "version": "1.0.11",
-  "versionCode": 12,
+  "version": "1.0.12",
+  "versionCode": 13,
   "description": "Production-grade video downloader for 15+ social media platforms with failover remote scrapers, Arabic/English bilingual UI, and gallery storage.",
   "requestFramePermissions": [],
   "majorCapabilities": [
