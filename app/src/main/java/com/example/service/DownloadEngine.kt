@@ -2605,6 +2605,8 @@ class MasterDownloadEngine(
     private val client: OkHttpClient = ScaleArchitecture.createHighThroughputClient(),
     private val context: Context? = null
 ) {
+    // Primary on-device extraction path: the OTA-updatable Python engine tree.
+    private val pythonRunner: PythonEngineRunner? = context?.let { PythonEngineRunner(it) }
     private val dynamicRunner = DynamicEngineRunner(client)
     private val tiktok = TikTokDownloader(client)
     private val pinterest = PinterestDownloader(client)
@@ -2664,16 +2666,30 @@ class MasterDownloadEngine(
         val resolvedUrl = UrlResolver.resolveRedirects(cleanUrl)
         val lower = resolvedUrl.lowercase()
 
-        // Tier 0: Dynamic Modular Runner (OTA Cloud execution without APK rebuild)
-        val detected = detectPlatformName(cleanUrl)
+        // Tier 0: On-device Dynamic Python Engine (OTA-updatable, primary path).
+        val route = DynamicEngineRouter.route(cleanUrl)
+        val detected = route.platformName
+        if (pythonRunner != null) {
+            try {
+                val pythonResult = pythonRunner.execute(resolvedUrl)
+                Log.i("MasterDownloadEngine", "Dynamic Python engine handled $detected successfully")
+                return@withContext pythonResult
+            } catch (e: Exception) {
+                Log.w("MasterDownloadEngine", "Python engine failed for $detected: ${e.message}")
+                if (!ENABLE_NATIVE_FALLBACK) throw e
+                Log.w("MasterDownloadEngine", "Falling back to native pipeline (ENABLE_NATIVE_FALLBACK=true)")
+            }
+        }
+
+        // Tier 1: Cloud Dynamic Modular Runner (optional, when a remote endpoint is configured).
         try {
             val dynamicRes = dynamicRunner.tryDynamicExecution(resolvedUrl, detected, config)
             if (dynamicRes != null) {
-                Log.d("MasterDownloadEngine", "Dynamic Modular Runner handled $detected successfully")
+                Log.d("MasterDownloadEngine", "Cloud Dynamic Runner handled $detected successfully")
                 return@withContext dynamicRes
             }
         } catch (e: Exception) {
-            Log.d("MasterDownloadEngine", "Dynamic runner fallback: ${e.message}")
+            Log.d("MasterDownloadEngine", "Cloud dynamic runner fallback: ${e.message}")
         }
 
         // Tier 1: Snapchat (including snapchat.com/t/, spotlight, stories, add, sc-cdn.net)
@@ -2743,5 +2759,13 @@ class MasterDownloadEngine(
         } catch (_: Exception) {
             return@withContext webExtractor.extract(resolvedUrl, config)
         }
+    }
+
+    companion object {
+        /**
+         * When the on-device Python engine cannot resolve a URL, the legacy native engines are
+         * used as a reliability fallback. Set to false to enforce an exclusive Python-only path.
+         */
+        const val ENABLE_NATIVE_FALLBACK = true
     }
 }

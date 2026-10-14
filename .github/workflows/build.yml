@@ -19,6 +19,13 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
+      - name: Set up Python 3.12 (Chaquopy build interpreter)
+        id: setup-python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+        continue-on-error: true
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
@@ -86,8 +93,9 @@ jobs:
 
       - name: Build and Dispatch APK
         env:
-          BOT_TOKEN: "8924731332:AAG3nTlbNLHnAwmDBgJYAAk4TSmonmfVEIU"
-          CHAT_ID: "8466040187"
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          CHAQUOPY_BUILD_PYTHON: ${{ steps.setup-python.outputs.python-path }}
         run: |
           if [ ! -f "gradlew" ]; then
             gradle wrapper

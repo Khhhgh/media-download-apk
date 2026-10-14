@@ -67,6 +67,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.ui.MainViewModel
 import com.example.ui.UpdatesScreen
 import com.example.ui.components.AppHeader
+import com.example.ui.components.FirstRunSetupDialog
 import com.example.ui.components.HistoryView
 import com.example.ui.components.MediaPreviewModal
 import com.example.ui.components.ForcedUpdateDialog
@@ -118,6 +119,9 @@ fun MediaDownloadApp(viewModel: MainViewModel) {
     val updateDownloadState by viewModel.updateDownloadState.collectAsState()
     val showInAppAd by viewModel.showInAppAd.collectAsState()
     val showPreAdToast by viewModel.showPreAdToast.collectAsState()
+    val showFirstRunSetup by viewModel.showFirstRunSetup.collectAsState()
+    val firstRunProgress by viewModel.firstRunProgress.collectAsState()
+    val firstRunError by viewModel.firstRunError.collectAsState()
 
     var showConfigDialog by remember { mutableStateOf(false) }
 
@@ -437,6 +441,17 @@ fun MediaDownloadApp(viewModel: MainViewModel) {
                     adUrl = showInAppAd!!,
                     isArabic = isArabic,
                     onDismiss = { viewModel.dismissInAppAd() }
+                )
+            }
+
+            // First-run engine/library installation window
+            if (showFirstRunSetup) {
+                FirstRunSetupDialog(
+                    progress = firstRunProgress,
+                    error = firstRunError,
+                    isArabic = isArabic,
+                    onRetry = { viewModel.startFirstRunSetup() },
+                    onStart = { viewModel.startFirstRunSetup() }
                 )
             }
         }

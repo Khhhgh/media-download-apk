@@ -15,9 +15,12 @@ import urllib.parse
 import urllib.error
 import http.client
 
-# Configuration
-BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8924731332:AAG3nTlbNLHnAwmDBgJYAAk4TSmonmfVEIU")
-ADMIN_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "8466040187")
+# Configuration.
+# Credentials MUST be provided through the environment (CI secrets or a local shell export).
+# No tokens are stored in the repository; the previous hard-coded values were compromised and
+# have been removed.
+BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+ADMIN_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 MAX_TELEGRAM_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB Telegram Bot API limit
 
 
@@ -204,6 +207,11 @@ def find_or_build_apk():
 
 
 def main():
+    if not BOT_TOKEN or not ADMIN_CHAT_ID:
+        print("[!] TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set in the environment.")
+        print("[!] The build can still be produced with: gradle :app:assembleDebug")
+        sys.exit(2)
+
     apk_path = find_or_build_apk()
     if not apk_path:
         print("[!] No APK found and build could not complete.")

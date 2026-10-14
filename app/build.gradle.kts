@@ -1,4 +1,5 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
+import java.io.File
 
 plugins {
   alias(libs.plugins.android.application)
@@ -6,6 +7,35 @@ plugins {
   alias(libs.plugins.google.devtools.ksp)
   alias(libs.plugins.secrets)
   alias(libs.plugins.google.services)
+  alias(libs.plugins.chaquopy)
+}
+
+// Host Python interpreter used by Chaquopy to build the on-device Python runtime.
+// It must match the app's Python major.minor version (see `chaquopy.defaultConfig.version`).
+// Override with -Pchaquopy.buildPython=/path/to/python or the CHAQUOPY_BUILD_PYTHON env var.
+val chaquopyBuildPython: String = run {
+  val override = (findProperty("chaquopy.buildPython") as String?)
+    ?: System.getenv("CHAQUOPY_BUILD_PYTHON")
+  if (!override.isNullOrBlank()) {
+    override
+  } else {
+    val candidates = listOf(
+      "/usr/bin/python3.12",
+      "/usr/local/bin/python3.12",
+      "/opt/hostedtoolcache/Python/3.12.0/x64/bin/python3.12",
+      "/usr/bin/python3",
+    )
+    candidates.firstOrNull { File(it).isFile } ?: "python3.12"
+  }
+}
+
+// The downapp/ engine sources are the single source of truth. They are copied into the APK
+// as assets/engines/ so that the first-run setup can install them without any network access.
+val downappAssetsDir: java.io.File = layout.buildDirectory.dir("generated/downappAssets").get().asFile
+val copyDownappEngines = tasks.register<Copy>("copyDownappEngines") {
+  from(rootProject.layout.projectDirectory.dir("downapp"))
+  into(downappAssetsDir.resolve("engines"))
+  exclude("**/__pycache__/**", "**/*.pyc")
 }
 
 android {
@@ -20,6 +50,12 @@ android {
     versionName = "1.0.14"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    ndk {
+      // Restrict packaged native ABIs (including the Chaquopy Python runtime) to the
+      // architectures the app actually ships. Python 3.12+ only supports 64-bit ABIs.
+      abiFilters += listOf("arm64-v8a", "x86_64")
+    }
   }
 
   // Auto-generate debug.keystore if missing on clean CI clones
@@ -88,11 +124,30 @@ android {
     compose = true
     buildConfig = true
   }
+  sourceSets {
+    getByName("main") {
+      // Generated location that receives the downapp/ engine tree as assets/engines/.
+      assets.srcDir(downappAssetsDir)
+    }
+  }
   testOptions { unitTests { isIncludeAndroidResources = true } }
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true
   }
+}
+
+chaquopy {
+  defaultConfig {
+    version = "3.12"
+    buildPython(chaquopyBuildPython)
+    // Platform engines rely exclusively on the Python standard library (urllib, json, re),
+    // so no third-party pip packages are installed at build time.
+  }
+}
+
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
+  dependsOn(copyDownappEngines)
 }
 
 // Configure the Secrets Gradle Plugin to use .env and .env.example files
@@ -130,6 +185,7 @@ dependencies {
   // implementation(libs.androidx.navigation.compose)
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
+  implementation(libs.androidx.work.runtime.ktx)
   implementation(libs.coil.compose)
   // implementation(libs.firebase.ai)
   // Uncomment to use Firestore:

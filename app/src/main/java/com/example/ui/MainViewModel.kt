@@ -20,10 +20,10 @@ import com.example.model.RemoteConfigData
 import com.example.service.AdManager
 import com.example.service.AppUpdateManager
 import com.example.service.FileDownloadService
+import com.example.service.FirstRunProgress
+import com.example.service.FirstRunSetupManager
 import com.example.service.MasterDownloadEngine
 import com.example.service.UpdateDownloadState
-import com.example.service.TelegramReporter
-import com.example.service.detectPlatformName
 import com.example.service.YouTubeBlockedException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -48,6 +48,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val fileDownloadService = FileDownloadService(context)
     private val downloadDao = AppDatabase.getInstance(context).downloadDao()
     private val appUpdateManager = AppUpdateManager(context)
+    private val firstRunSetupManager = FirstRunSetupManager(context)
+
+    private val _showFirstRunSetup = MutableStateFlow(firstRunSetupManager.shouldRunSetup())
+    val showFirstRunSetup: StateFlow<Boolean> = _showFirstRunSetup.asStateFlow()
+
+    private val _firstRunProgress = MutableStateFlow<FirstRunProgress?>(null)
+    val firstRunProgress: StateFlow<FirstRunProgress?> = _firstRunProgress.asStateFlow()
+
+    private val _firstRunError = MutableStateFlow<String?>(null)
+    val firstRunError: StateFlow<String?> = _firstRunError.asStateFlow()
+
+    private var firstRunJob: Job? = null
 
     val remoteConfig: StateFlow<RemoteConfigData> = remoteConfigRepo.configState
     val downloadsHistory: StateFlow<List<DownloadItem>> = downloadDao.getAllDownloads()
@@ -105,6 +117,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setTab(index: Int) {
         _selectedTab.value = index
+    }
+
+    /**
+     * Runs the first-run engine setup (bundled install + OTA + verification) without blocking the
+     * UI. Safe to call repeatedly (e.g. from the retry button).
+     */
+    fun startFirstRunSetup() {
+        if (firstRunJob?.isActive == true) return
+        firstRunJob = viewModelScope.launch {
+            _firstRunError.value = null
+            val result = firstRunSetupManager.runSetup { progress ->
+                _firstRunProgress.value = progress
+            }
+            if (result.success) {
+                _showFirstRunSetup.value = false
+                _firstRunProgress.value = null
+            } else {
+                _firstRunError.value = result.error ?: "فشل التهيئة الأولية"
+            }
+        }
     }
 
     fun onUrlChange(newUrl: String) {
@@ -207,9 +239,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: YouTubeBlockedException) {
                 _showYouTubeBlockedDialog.value = true
             } catch (e: Exception) {
+                // MasterDownloadEngine.resolveMedia already reports the failure with the real reason.
                 Log.e("MainViewModel", "Extraction failed", e)
-                val platform = detectPlatformName(cleanUrl)
-                TelegramReporter.sendFailure(platform, e.localizedMessage ?: "Extraction failed")
                 val msg = if (_isArabic.value) {
                     "فشل استخراج الرابط. جاري تجربة المحركات الاحتياطية أو تأكد من أن الرابط عام وليس خاص."
                 } else {
