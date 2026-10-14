@@ -115,9 +115,16 @@ object UrlResolver {
             } else if (url.contains("pinterest.", ignoreCase = true) && url.contains("/pin/")) {
                 cleanBase
             } else if (url.contains("instagram.com", ignoreCase = true) || url.contains("instagr.am", ignoreCase = true)) {
-                url.replace(Regex("[?&](psln|igsh|igshid|utm_[^&=]+|fbclid)=[^&#]*", RegexOption.IGNORE_CASE), "")
-                    .replace(Regex("\\?&"), "?")
-                    .trimEnd('?', '&')
+                if (url.contains("/reel", ignoreCase = true) ||
+                    url.contains("/p/", ignoreCase = true) ||
+                    url.contains("/tv/", ignoreCase = true) ||
+                    url.contains("/share/", ignoreCase = true)) {
+                    cleanBase
+                } else {
+                    url.replace(Regex("[?&](psln|igsh|igshid|utm_[^&=]+|fbclid)=[^&#]*", RegexOption.IGNORE_CASE), "")
+                        .replace(Regex("\\?&"), "?")
+                        .trimEnd('?', '&')
+                }
             } else if (qIndex != -1 && (url.contains("utm_", ignoreCase = true) ||
                         url.contains("is_from_webapp", ignoreCase = true) ||
                         url.contains("fbclid", ignoreCase = true) ||
@@ -946,9 +953,11 @@ class InstagramDownloader(
     private fun cleanEscaped(raw: String): String = raw
         .replace("\\/", "/")
         .replace("\\u0026", "&")
+        .replace("\\u0025", "%")
         .replace("&amp;", "&")
         .replace("\\\"", "\"")
-        .trim()
+        .replace("\\\\", "\\")
+        .trim('"', ' ', '\\', '\'', '\n', '\r')
 
     /**
      * Converts an Instagram base64-style shortcode to a numeric media ID.
@@ -1058,8 +1067,8 @@ class InstagramDownloader(
         // 3. Search for video streams across the entire embed response
         val videoUrls = LinkedHashSet<String>()
 
-        // Video Pattern A: "video_url":"https:..."
-        val videoUrlPattern = Pattern.compile("[\"\\\\]*video_url[\"\\\\]*\\s*:\\s*[\"\\\\]*(https:[^\"\\\\]+?)[\"\\\\]*[,}\\]]")
+        // Video Pattern A: "video_url":"https:..." or \"video_url\":\"https:...\"
+        val videoUrlPattern = Pattern.compile("(?:video_url|videoUrl)\\\\*\"\\s*:\\s*\\\\*\"(https:[^\"\\r\\n<>]+?)\\\\*\"")
         val vuMatcher = videoUrlPattern.matcher(html)
         while (vuMatcher.find()) {
             val v = cleanEscaped(vuMatcher.group(1))
@@ -1067,7 +1076,7 @@ class InstagramDownloader(
         }
 
         // Video Pattern B: "video_versions": [ { "url": "https:..." } ]
-        val videoVersionsPattern = Pattern.compile("[\"\\\\]*video_versions[\"\\\\]*\\s*:\\s*\\[[^\\]]*?[\"\\\\]*url[\"\\\\]*\\s*:\\s*[\"\\\\]*(https:[^\"\\\\]+?)[\"\\\\]*")
+        val videoVersionsPattern = Pattern.compile("(?:video_versions|videoVersions)\\\\*\"\\s*:\\s*\\[[^\\]]*?\\\\*\"url\\\\*\"\\s*:\\s*\\\\*\"(https:[^\"\\r\\n<>]+?)\\\\*\"")
         val vvMatcher = videoVersionsPattern.matcher(html)
         while (vvMatcher.find()) {
             val v = cleanEscaped(vvMatcher.group(1))
@@ -1078,12 +1087,12 @@ class InstagramDownloader(
         val videoTagPattern = Pattern.compile("<(?:video|source)[^>]*src=[\"']([^\"']+)[\"']", Pattern.CASE_INSENSITIVE)
         val vTagMatcher = videoTagPattern.matcher(html)
         while (vTagMatcher.find()) {
-            val v = vTagMatcher.group(1).replace("&amp;", "&").trim()
+            val v = cleanEscaped(vTagMatcher.group(1))
             if (v.isNotBlank() && !videoUrls.contains(v)) videoUrls.add(v)
         }
 
         // Video Pattern D: Direct CDN MP4 pattern
-        val cdnMp4Pattern = Pattern.compile("(https?:\\\\/\\\\/[^\"'\\s<>]*(?:cdninstagram\\.com|fbcdn\\.net)[^\"'\\s<>]+\\.mp4[^\"'\\s<>]*)")
+        val cdnMp4Pattern = Pattern.compile("(https?:(?:\\\\/|/){2}[^\"'\\s<>]*(?:cdninstagram\\.com|fbcdn\\.net)[^\"'\\s<>]+\\.mp4[^\"'\\s<>]*)")
         val cdnMatcher = cdnMp4Pattern.matcher(html)
         while (cdnMatcher.find()) {
             val v = cleanEscaped(cdnMatcher.group(1))
@@ -1092,7 +1101,7 @@ class InstagramDownloader(
 
         // 4. Search for photo slides
         val imageUrls = LinkedHashSet<String>()
-        val displayUrlPattern = Pattern.compile("[\"\\\\]*display_url[\"\\\\]*\\s*:\\s*[\"\\\\]*(https:[^\"\\\\]+?)[\"\\\\]*[,}\\]]")
+        val displayUrlPattern = Pattern.compile("(?:display_url|displayUrl)\\\\*\"\\s*:\\s*\\\\*\"(https:[^\"\\r\\n<>]+?)\\\\*\"")
         val duMatcher = displayUrlPattern.matcher(html)
         while (duMatcher.find()) {
             val p = cleanEscaped(duMatcher.group(1))
@@ -1399,15 +1408,17 @@ class InstagramDownloader(
                     val child = edges.optJSONObject(i)?.optJSONObject("node") ?: continue
                     val isVideo = child.optBoolean("is_video", false) || child.optBoolean("video", false)
                     if (isVideo) {
-                        val video = child.optString("video_url", "").ifBlank {
+                        val rawVideo = child.optString("video_url", "").ifBlank {
                             child.optJSONArray("video_versions")?.optJSONObject(0)?.optString("url", "") ?: ""
                         }
+                        val video = cleanEscaped(rawVideo)
                         if (video.isNotBlank()) {
                             videoUrls.add(video)
                             items.add(CarouselItem(url = video, format = "mp4", label = "Slide ${i + 1} (Video)", isHd = true))
                         }
                     } else {
-                        val img = child.optString("display_url", "").ifBlank { child.optString("image_url", "") }
+                        val rawImg = child.optString("display_url", "").ifBlank { child.optString("image_url", "") }
+                        val img = cleanEscaped(rawImg)
                         if (img.isNotBlank()) {
                             imageUrls.add(img)
                             items.add(CarouselItem(url = img, format = "jpg", label = "Slide ${i + 1} (Image)", isHd = true))
@@ -1416,16 +1427,18 @@ class InstagramDownloader(
                 }
             } else {
                 val isVideo = node.optBoolean("is_video", false) || node.optBoolean("video", false)
-                val video = if (isVideo || node.has("video_url")) {
+                val rawVideo = if (isVideo || node.has("video_url")) {
                     node.optString("video_url", "").ifBlank {
                         node.optJSONArray("video_versions")?.optJSONObject(0)?.optString("url", "") ?: ""
                     }
                 } else ""
+                val video = cleanEscaped(rawVideo)
                 if (video.isNotBlank()) {
                     videoUrls.add(video)
                     items.add(CarouselItem(url = video, format = "mp4", label = "Video", isHd = true))
                 } else {
-                    val img = node.optString("display_url", "").ifBlank { node.optString("image_url", "") }
+                    val rawImg = node.optString("display_url", "").ifBlank { node.optString("image_url", "") }
+                    val img = cleanEscaped(rawImg)
                     if (img.isNotBlank()) {
                         imageUrls.add(img)
                         items.add(CarouselItem(url = img, format = "jpg", label = "Image", isHd = true))
@@ -2479,12 +2492,7 @@ class DirectWebExtractor(private val client: OkHttpClient) : BaseDownloaderEngin
  * unshortening redirects, and multi-tier failovers.
  */
 class MasterDownloadEngine(
-    private val client: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .followRedirects(true)
-        .followSslRedirects(true)
-        .build(),
+    private val client: OkHttpClient = ScaleArchitecture.createHighThroughputClient(),
     private val context: Context? = null
 ) {
     private val tiktok = TikTokDownloader(client)
@@ -2512,6 +2520,22 @@ class MasterDownloadEngine(
             throw YouTubeBlockedException()
         }
 
+        // L1 Cache: Instant 0ms response for duplicate/viral link resolution
+        val cached = ScaleArchitecture.mediaCache.get(cleanUrl)
+        if (cached != null) {
+            Log.d("MasterDownloadEngine", "Cache HIT for URL: $cleanUrl")
+            return@withContext cached
+        }
+
+        // Single-Flight Coalescing: Absorbs concurrency spikes (500k-1M requests) for the same media
+        return@withContext ScaleArchitecture.mediaCoalescer.execute(cleanUrl) {
+            val result = executeResolution(cleanUrl, config)
+            ScaleArchitecture.mediaCache.put(cleanUrl, result)
+            result
+        }
+    }
+
+    private suspend fun executeResolution(cleanUrl: String, config: RemoteConfigData): MediaResult = withContext(Dispatchers.IO) {
         // Automatic redirect resolution (HTTP 301/302/307/308) before calling extraction engines
         val resolvedUrl = UrlResolver.resolveRedirects(cleanUrl)
         val lower = resolvedUrl.lowercase()

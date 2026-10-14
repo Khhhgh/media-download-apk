@@ -197,7 +197,7 @@ fun UpdatesScreen(
                     .padding(horizontal = 8.dp, vertical = 4.dp)
             ) {
                 Text(
-                    text = "v${BuildConfig.VERSION_NAME.ifBlank { "1.0.9" }}",
+                    text = "v${BuildConfig.VERSION_NAME.ifBlank { "1.0.10" }}",
                     color = TelegramCyan,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold

@@ -58,61 +58,77 @@ class FileDownloadService(private val context: Context) {
         }
 
         try {
-            val isInstagram = downloadUrl.contains("cdninstagram.com", ignoreCase = true) ||
-                    downloadUrl.contains("fbcdn.net", ignoreCase = true) ||
-                    downloadUrl.contains("instagram.com", ignoreCase = true)
+            // Unescape HTML entities & unicode in case the URL was extracted from embedded JSON or HTML
+            val cleanUrl = downloadUrl
+                .replace("&amp;", "&")
+                .replace("\\u0026", "&")
+                .replace("\\/", "/")
+                .replace(" ", "%20")
+                .trim('"', ' ', '\\')
 
-            val mobileUserAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+            val isInstagram = cleanUrl.contains("cdninstagram.com", ignoreCase = true) ||
+                    cleanUrl.contains("fbcdn.net", ignoreCase = true) ||
+                    cleanUrl.contains("instagram.com", ignoreCase = true)
 
-            fun buildDownloadRequest(ua: String, referer: String?): Request {
-                val bld = Request.Builder()
-                    .url(downloadUrl)
+            val mobileUa = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+            val desktopUa = UNIVERSAL_USER_AGENT
+            val mediaUa = "stagefright/1.2 (Linux;Android 13)"
+
+            // Multi-tier defensive strategies for CDN downloads without conflicting Origin headers
+            val attempts = if (isInstagram) {
+                listOf(
+                    // Strategy 1: Mobile Chrome UA + Instagram Referer (standard social video navigation)
+                    Pair(mobileUa, "https://www.instagram.com/"),
+                    // Strategy 2: Mobile Chrome UA with NO Referer (raw stream fetching, bypasses anti-hotlinking on signed CDN)
+                    Pair(mobileUa, null),
+                    // Strategy 3: Desktop Chrome UA + Instagram Referer
+                    Pair(desktopUa, "https://www.instagram.com/"),
+                    // Strategy 4: Desktop Chrome UA with NO Referer
+                    Pair(desktopUa, null),
+                    // Strategy 5: Media player daemon UA (ExoPlayer/Stagefright style)
+                    Pair(mediaUa, null)
+                )
+            } else {
+                listOf(
+                    Pair(mobileUa, getRefererForUrl(cleanUrl)),
+                    Pair(desktopUa, getRefererForUrl(cleanUrl)),
+                    Pair(mobileUa, null)
+                )
+            }
+
+            var response: okhttp3.Response? = null
+            var lastCode = 0
+
+            for ((ua, referer) in attempts) {
+                val reqBuilder = Request.Builder()
+                    .url(cleanUrl)
                     .header("User-Agent", ua)
                     .header("Accept", "*/*")
                     .header("Accept-Encoding", "identity")
                     .header("Connection", "keep-alive")
+                    .header("Range", "bytes=0-")
+
                 if (!referer.isNullOrBlank()) {
-                    bld.header("Referer", referer)
+                    reqBuilder.header("Referer", referer)
                 }
-                if (isInstagram) {
-                    bld.header("Origin", "https://www.instagram.com")
-                    bld.header("Sec-Fetch-Dest", "video")
-                    bld.header("Sec-Fetch-Mode", "no-cors")
-                    bld.header("Sec-Fetch-Site", "cross-site")
-                }
-                return bld.build()
-            }
 
-            // Primary attempt: Mobile Android User-Agent + Instagram Referer (Required by Facebook CDN)
-            var request = buildDownloadRequest(
-                ua = mobileUserAgent,
-                referer = if (isInstagram) "https://www.instagram.com/" else getRefererForUrl(downloadUrl)
-            )
-
-            var response = client.newCall(request).execute()
-
-            // If 403 Forbidden is encountered, retry with fallback configurations
-            if (response.code == 403) {
-                response.close()
-                Log.w("FileDownloadService", "Received HTTP 403 on primary download, retrying with fallback headers...")
-                request = buildDownloadRequest(
-                    ua = UNIVERSAL_USER_AGENT,
-                    referer = "https://www.instagram.com/"
-                )
-                response = client.newCall(request).execute()
-
-                if (response.code == 403) {
-                    response.close()
-                    request = buildDownloadRequest(
-                        ua = mobileUserAgent,
-                        referer = null
-                    )
-                    response = client.newCall(request).execute()
+                try {
+                    val resp = client.newCall(reqBuilder.build()).execute()
+                    if (resp.isSuccessful) {
+                        response = resp
+                        break
+                    } else {
+                        lastCode = resp.code
+                        resp.close()
+                        Log.w("FileDownloadService", "Attempt with UA='$ua' Referer='$referer' yielded HTTP $lastCode, trying fallback...")
+                    }
+                } catch (netEx: Exception) {
+                    Log.w("FileDownloadService", "Network attempt failed: ${netEx.message}")
                 }
             }
 
-            if (!response.isSuccessful) {
-                throw IOException("Download failed with HTTP ${response.code}")
+            if (response == null || !response.isSuccessful) {
+                throw IOException("Download failed with HTTP ${if (lastCode != 0) lastCode else "Error"}")
             }
 
             val body = response.body ?: throw IOException("Empty response body")
