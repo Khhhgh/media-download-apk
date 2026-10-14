@@ -1,8 +1,0 @@
-<resources>
-    <string name="app_name">media download - تحميل الميديا</string>
-    <string name="app_tagline">Ultra Fast • No Watermark • 15+ Platforms</string>
-    <string name="paste_download">لصق وتحميل / Paste &amp; Download</string>
-    <string name="input_hint">Paste link from TikTok, Instagram, Twitter, etc…</string>
-    <string name="saved_to_gallery">تم الحفظ في المعرض بنجاح / Saved to Gallery</string>
-    <string name="failed_to_download">فشل التحميل / Failed to download</string>
-</resources>
