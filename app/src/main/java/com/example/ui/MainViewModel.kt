@@ -241,6 +241,54 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         currentDownloadJob?.cancel()
         currentDownloadJob = viewModelScope.launch {
+            // Multi-slide post (e.g. Instagram Carousel): download every slide separately
+            // with its own correct format (video -> mp4, image -> jpg).
+            if (format == "carousel" && media.carouselItems.isNotEmpty()) {
+                _downloadProgress.value = DownloadProgress(
+                    url = targetUrl,
+                    fileName = media.title,
+                    isDownloading = true
+                )
+
+                try {
+                    val downloadedPairs = fileDownloadService.downloadCarousel(
+                        items = media.carouselItems,
+                        baseTitle = media.title
+                    ) { progress ->
+                        _downloadProgress.value = progress
+                    }
+
+                    val firstPair = downloadedPairs.firstOrNull()
+                    val filePath = firstPair?.first?.absolutePath ?: (firstPair?.second?.toString() ?: "")
+                    val videoCount = media.carouselItems.count { it.format == "mp4" }
+                    val imageCount = media.carouselItems.size - videoCount
+
+                    val item = DownloadItem(
+                        title = "${media.title} (${media.carouselItems.size} slides)",
+                        platform = media.platform,
+                        sourceUrl = media.sourceUrl,
+                        localFilePath = filePath,
+                        mediaUri = firstPair?.second?.toString() ?: filePath,
+                        fileSize = _downloadProgress.value.bytesDownloaded,
+                        formattedSize = "$videoCount video / $imageCount image",
+                        mimeType = if (videoCount > 0) "video/mp4" else "image/jpeg",
+                        thumbnailUri = media.thumbnailUrl ?: media.carouselItems.firstOrNull()?.url
+                    )
+                    downloadDao.insertDownload(item)
+
+                    emitToast(
+                        if (_isArabic.value) "تم حفظ جميع عناصر المنشور (${media.carouselItems.size}) في المعرض بنجاح!"
+                        else "Saved all ${media.carouselItems.size} slides to Gallery!"
+                    )
+                } catch (e: Exception) {
+                    Log.e("MainViewModel", "Carousel download error", e)
+                    emitToast(
+                        if (_isArabic.value) "فشل تحميل عناصر المنشور: ${e.message}" else "Carousel download failed: ${e.message}"
+                    )
+                }
+                return@launch
+            }
+
             // Check if this is a TikTok Photo Album download (batch download all photos)
             if (media.photoUrls.isNotEmpty() && format != "mp3") {
                 _downloadProgress.value = DownloadProgress(

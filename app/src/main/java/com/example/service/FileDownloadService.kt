@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
+import com.example.model.CarouselItem
 import com.example.model.DownloadProgress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
@@ -21,8 +22,15 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
 class FileDownloadService(private val context: Context) {
+    companion object {
+        // Monotonic counter guarantees collision-free file names even when many slides
+        // are written within the same millisecond.
+        private val DOWNLOAD_COUNTER = AtomicLong(0L)
+    }
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(25, TimeUnit.SECONDS)
         .readTimeout(90, TimeUnit.SECONDS)
@@ -37,7 +45,8 @@ class FileDownloadService(private val context: Context) {
         onProgress: (DownloadProgress) -> Unit
     ): Pair<File?, Uri?> = withContext(Dispatchers.IO) {
         val sanitizedTitle = sanitizeFilename(title)
-        val fileName = "MediaDownload_${sanitizedTitle}_${System.currentTimeMillis()}.$format"
+        val uniqueSuffix = "${System.currentTimeMillis()}_${DOWNLOAD_COUNTER.incrementAndGet()}"
+        val fileName = "MediaDownload_${sanitizedTitle}_$uniqueSuffix.$format"
         val isAudio = format == "mp3"
         val isImage = format in listOf("jpg", "jpeg", "png", "webp")
         val mimeType = when {
@@ -243,6 +252,66 @@ class FileDownloadService(private val context: Context) {
                 isDownloading = false,
                 isSuccess = true,
                 savedPath = results.firstOrNull()?.second?.toString() ?: ""
+            )
+        )
+
+        results
+    }
+
+    /**
+     * Downloads a multi-slide post (e.g. Instagram Carousel) where every slide is saved
+     * separately: video slides as .mp4 and image slides as .jpg.
+     */
+    suspend fun downloadCarousel(
+        items: List<CarouselItem>,
+        baseTitle: String,
+        onProgress: (DownloadProgress) -> Unit
+    ): List<Pair<File?, Uri?>> = withContext(Dispatchers.IO) {
+        val results = mutableListOf<Pair<File?, Uri?>>()
+        val total = items.size
+        if (total == 0) return@withContext results
+
+        val sanitizedBase = sanitizeFilename(baseTitle)
+
+        items.forEachIndexed { index, item ->
+            val number = index + 1
+            val format = item.format.ifBlank { "jpg" }.lowercase()
+            val slideTitle = "${sanitizedBase}_slide_$number"
+            val percent = ((number.toFloat() / total) * 100).toInt()
+
+            onProgress(
+                DownloadProgress(
+                    url = item.url,
+                    fileName = "$slideTitle.$format ($number/$total)",
+                    progressPercent = percent,
+                    isDownloading = true,
+                    speedText = "$number of $total"
+                )
+            )
+
+            try {
+                val res = downloadMedia(
+                    downloadUrl = item.url,
+                    title = slideTitle,
+                    format = format,
+                    onProgress = { /* sub-progress reported via outer counter */ }
+                )
+                results.add(res)
+            } catch (e: Exception) {
+                Log.w("FileDownloadService", "Failed to download carousel slide $number: ${e.message}")
+            }
+        }
+
+        onProgress(
+            DownloadProgress(
+                url = items.firstOrNull()?.url ?: "",
+                fileName = "$sanitizedBase (All $total slides saved)",
+                progressPercent = 100,
+                isDownloading = false,
+                isSuccess = true,
+                savedPath = results.firstOrNull()?.second?.toString()
+                    ?: results.firstOrNull()?.first?.absolutePath
+                    ?: ""
             )
         )
 

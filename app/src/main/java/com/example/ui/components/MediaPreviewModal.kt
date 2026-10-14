@@ -252,7 +252,60 @@ fun MediaPreviewModal(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                if (media.photoUrls.isNotEmpty()) {
+                if (media.carouselItems.size > 1) {
+                    // Multi-slide post (e.g. Instagram Carousel): download each slide separately
+                    QualityButton(
+                        option = QualityOption(
+                            label = if (isArabic) "تحميل كل العناصر (${media.carouselItems.size} سلايد)"
+                            else "Download All Slides (${media.carouselItems.size})",
+                            url = media.carouselItems.first().url,
+                            format = "carousel",
+                            isHd = true
+                        ),
+                        isArabic = isArabic,
+                        onClick = {
+                            onDownloadQuality(
+                                QualityOption(
+                                    label = "Download All Slides",
+                                    url = media.carouselItems.first().url,
+                                    format = "carousel",
+                                    isHd = true
+                                )
+                            )
+                        }
+                    )
+
+                    // Individual video quality (when the post also contains a video)
+                    media.qualityOptions.filter { it.format == "mp4" }.forEach { opt ->
+                        Spacer(modifier = Modifier.height(6.dp))
+                        QualityButton(
+                            option = opt,
+                            isArabic = isArabic,
+                            onClick = { onDownloadQuality(opt) }
+                        )
+                    }
+
+                    if (!media.audioUrl.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        QualityButton(
+                            option = QualityOption(
+                                label = if (isArabic) "تحميل الصوت فقط (MP3)" else "Download Audio Only (MP3)",
+                                url = media.audioUrl,
+                                format = "mp3"
+                            ),
+                            isArabic = isArabic,
+                            onClick = {
+                                onDownloadQuality(
+                                    QualityOption(
+                                        label = "Audio Only",
+                                        url = media.audioUrl,
+                                        format = "mp3"
+                                    )
+                                )
+                            }
+                        )
+                    }
+                } else if (media.photoUrls.isNotEmpty()) {
                     // Specialized Photo Album Layout
                     QualityButton(
                         option = QualityOption(

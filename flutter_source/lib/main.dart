@@ -240,6 +240,67 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _startCarouselDownload() async {
+    final media = _extractedMedia;
+    if (media == null || media.carouselItems.isEmpty) return;
+
+    await _adManager.handleDownloadTrigger(widget.configService.adSettings);
+    await _loadAdCounter();
+
+    setState(() {
+      _isDownloading = true;
+      _downloadPercent = 0.0;
+    });
+
+    try {
+      var index = 0;
+      for (final item in media.carouselItems) {
+        index++;
+        final slot = index;
+        final savedPath = await _storageService.downloadAndSaveToGallery(
+          downloadUrl: item.url,
+          title: '${media.title}_slide_$slot',
+          format: item.format,
+          onProgress: (received, total, percent, speed) {
+            final overall = ((slot - 1) + percent / 100) / media.carouselItems.length * 100;
+            setState(() {
+              _downloadPercent = overall;
+              _downloadSpeed = speed;
+            });
+          },
+        );
+        _history.insert(0, {
+          'title': '${media.title} #$slot',
+          'platform': media.platform,
+          'path': savedPath,
+          'time': DateTime.now().toString(),
+        });
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            widget.isArabic
+                ? 'تم حفظ جميع العناصر (${media.carouselItems.length}) في المعرض!'
+                : 'Saved all ${media.carouselItems.length} slides to Gallery!',
+          ),
+          backgroundColor: const Color(0xFF10B981),
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(widget.isArabic ? 'فشل تحميل العناصر' : 'Carousel download failed: $e'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    } finally {
+      setState(() {
+        _isDownloading = false;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -366,13 +427,39 @@ class _HomeScreenState extends State<HomeScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(_extractedMedia!.title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                  const SizedBox(height: 10),
-                  ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF10B981)),
-                    onPressed: () => _startDownload(_extractedMedia!.videoUrl, 'mp4'),
-                    icon: const Icon(Icons.download),
-                    label: Text(widget.isArabic ? 'حفظ الفيديو في المعرض (HD)' : 'Save Video to Gallery (HD)'),
-                  ),
+                  if (_extractedMedia!.carouselItems.length > 1) ...[
+                    const SizedBox(height: 10),
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF10B981)),
+                      onPressed: _isDownloading ? null : _startCarouselDownload,
+                      icon: const Icon(Icons.collections),
+                      label: Text(
+                        widget.isArabic
+                            ? 'تحميل كل العناصر (${_extractedMedia!.carouselItems.length})'
+                            : 'Download All Slides (${_extractedMedia!.carouselItems.length})',
+                      ),
+                    ),
+                  ] else if (_extractedMedia!.qualities.isNotEmpty) ...[
+                    ..._extractedMedia!.qualities.map(
+                      (q) => Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF2563EB)),
+                          onPressed: _isDownloading ? null : () => _startDownload(q.url, q.format),
+                          icon: const Icon(Icons.download),
+                          label: Text(q.label),
+                        ),
+                      ),
+                    ),
+                  ] else ...[
+                    const SizedBox(height: 10),
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF10B981)),
+                      onPressed: _isDownloading ? null : () => _startDownload(_extractedMedia!.videoUrl, 'mp4'),
+                      icon: const Icon(Icons.download),
+                      label: Text(widget.isArabic ? 'حفظ الفيديو في المعرض (HD)' : 'Save Video to Gallery (HD)'),
+                    ),
+                  ],
                 ],
               ),
             ),

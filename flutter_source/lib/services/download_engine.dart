@@ -10,6 +10,7 @@ class MediaResult {
   final String platform;
   final String? author;
   final List<QualityOption> qualities;
+  final List<CarouselItem> carouselItems;
 
   MediaResult({
     required this.title,
@@ -19,6 +20,7 @@ class MediaResult {
     required this.platform,
     this.author,
     this.qualities = const [],
+    this.carouselItems = const [],
   });
 }
 
@@ -33,6 +35,19 @@ class QualityOption {
     required this.url,
     this.format = 'mp4',
     this.isHd = false,
+  });
+}
+
+/// A single slide inside a multi-item post (e.g. Instagram Carousel).
+class CarouselItem {
+  final String url;
+  final String format;
+  final String label;
+
+  CarouselItem({
+    required this.url,
+    this.format = 'jpg',
+    this.label = '',
   });
 }
 
@@ -122,9 +137,11 @@ class MasterDownloadEngine {
       ) ?? (throw Exception('Failed to extract Facebook video.'));
     }
 
-    // 4. Instagram
+    // 4. Instagram (video-first embed parser -> carousel aware; Cobalt as fallback)
     if (lower.contains('instagram.com') || lower.contains('instagr.am')) {
       final expanded = await unshortenUrl(cleanUrl);
+      final embed = await _executeInstagramEmbed(expanded);
+      if (embed != null) return embed;
       return await _executeCobaltExtractor(
         url: expanded,
         apiUrl: engines['instagram']?.primaryApi ?? 'https://api.cobalt.tools/api/json',
@@ -283,6 +300,133 @@ class MasterDownloadEngine {
         .replaceAll(r'\u002526', '&')
         .replaceAll(r'\u0026', '&')
         .replaceAll('&amp;', '&');
+  }
+
+  static const String _mobileUserAgent =
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1';
+
+  String _cleanEscaped(String raw) => raw
+      .replaceAll(r'\/', '/')
+      .replaceAll(r'\u0026', '&')
+      .replaceAll('&amp;', '&')
+      .trim();
+
+  Future<MediaResult?> _executeInstagramEmbed(String url) async {
+    final shortcodeMatch = RegExp(r'/(?:p|reel|reels|tv)/([A-Za-z0-9_-]+)').firstMatch(url);
+    if (shortcodeMatch == null) return null;
+    final shortcode = shortcodeMatch.group(1)!;
+    final isReel = url.contains('/reel/') || url.contains('/reels/') || url.contains('/tv/');
+
+    final candidates = [
+      'https://www.instagram.com/p/$shortcode/embed/captioned/',
+      'https://www.instagram.com/p/$shortcode/embed/',
+    ];
+
+    for (final embedUrl in candidates) {
+      try {
+        final response = await _dio.get(
+          embedUrl,
+          options: Options(headers: {
+            'User-Agent': _mobileUserAgent,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Sec-Fetch-Mode': 'navigate',
+          }),
+        );
+        if (response.statusCode != 200 || response.data is! String) continue;
+        final result = _parseInstagramHtml(response.data as String, url, isReel);
+        if (result != null) return result;
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  MediaResult? _parseInstagramHtml(String html, String pageUrl, bool isReel) {
+    String? caption;
+    final capMatch = RegExp(r'<div class="Caption"[^>]*>(.*?)</div>', dotAll: true).firstMatch(html);
+    if (capMatch != null) {
+      caption = capMatch
+          .group(1)!
+          .replaceAll(RegExp(r'<[^>]+>'), ' ')
+          .replaceAll('&amp;', '&')
+          .trim();
+    }
+    if (caption == null || caption.isEmpty) {
+      caption = RegExp(r'<meta\s+(?:property|name)="og:title"\s+content="([^"]+)"')
+          .firstMatch(html)
+          ?.group(1)
+          ?.replaceAll('&amp;', '&')
+          .trim();
+    }
+    final title = (caption == null || caption.isEmpty)
+        ? 'Instagram Media'
+        : caption.substring(0, caption.length > 60 ? 60 : caption.length);
+
+    final videoUrls = <String>[];
+    for (final m in RegExp(r'"video_url"\s*:\s*"(https:.+?)"').allMatches(html)) {
+      final v = _cleanEscaped(m.group(1)!);
+      if (v.isNotEmpty && !videoUrls.contains(v)) videoUrls.add(v);
+    }
+    if (videoUrls.isEmpty) {
+      for (final m in RegExp(r'<video[^>]*src="([^"]+)"').allMatches(html)) {
+        final v = _cleanEscaped(m.group(1)!);
+        if (v.isNotEmpty && !videoUrls.contains(v)) videoUrls.add(v);
+      }
+    }
+
+    final imageUrls = <String>[];
+    for (final m in RegExp(r'"display_url"\s*:\s*"(https:.+?)"').allMatches(html)) {
+      final p = _cleanEscaped(m.group(1)!);
+      if (p.isNotEmpty && !imageUrls.contains(p)) imageUrls.add(p);
+    }
+    if (imageUrls.isEmpty) {
+      for (final m in RegExp(r'<img[^>]*class="[^"]*EmbeddedMediaImage[^"]*"[^>]*src="([^"]+)"').allMatches(html)) {
+        final p = _cleanEscaped(m.group(1)!);
+        if (p.isNotEmpty && !imageUrls.contains(p)) imageUrls.add(p);
+      }
+    }
+
+    // Video found -> strictly return MP4, never the JPG cover.
+    if (videoUrls.isNotEmpty) {
+      final items = <CarouselItem>[];
+      for (var i = 0; i < videoUrls.length; i++) {
+        items.add(CarouselItem(url: videoUrls[i], format: 'mp4', label: 'Video ${i + 1}'));
+      }
+      for (var i = 0; i < imageUrls.length; i++) {
+        items.add(CarouselItem(url: imageUrls[i], format: 'jpg', label: 'Photo ${i + 1}'));
+      }
+      return MediaResult(
+        title: title,
+        videoUrl: videoUrls.first,
+        thumbnailUrl: imageUrls.isNotEmpty ? imageUrls.first : null,
+        platform: 'Instagram',
+        qualities: [
+          QualityOption(label: 'Highest Quality Video (MP4)', url: videoUrls.first, format: 'mp4', isHd: true)
+        ],
+        carouselItems: items,
+      );
+    }
+
+    // A Reel/TV link is always a video: never save its poster as JPG.
+    if (isReel) return null;
+
+    if (imageUrls.isNotEmpty) {
+      final items = <CarouselItem>[];
+      for (var i = 0; i < imageUrls.length; i++) {
+        items.add(CarouselItem(url: imageUrls[i], format: 'jpg', label: 'Photo ${i + 1}'));
+      }
+      return MediaResult(
+        title: title,
+        videoUrl: imageUrls.first,
+        thumbnailUrl: imageUrls.first,
+        platform: 'Instagram',
+        qualities: [
+          QualityOption(label: 'Original Image (JPG)', url: imageUrls.first, format: 'jpg', isHd: true)
+        ],
+        carouselItems: items,
+      );
+    }
+    return null;
   }
 
   Future<MediaResult?> _executeCobaltExtractor({

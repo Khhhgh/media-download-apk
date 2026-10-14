@@ -53,10 +53,23 @@ class StorageService {
     );
 
     // Save directly to device gallery via Gal
-    if (format == 'mp4') {
+    final fmt = format.toLowerCase();
+    if (fmt == 'mp4') {
       await Gal.putVideo(filePath, album: 'MediaDownload');
+    } else if (fmt == 'jpg' || fmt == 'jpeg' || fmt == 'png' || fmt == 'webp' || fmt == 'gif') {
+      await Gal.putImage(filePath, album: 'MediaDownload');
+    } else if (fmt == 'mp3') {
+      // Save audio (best-effort)
+      try {
+        await Gal.putAudio(filePath, album: 'MediaDownload');
+      } catch (_) {}
     } else {
-      // Audio or other format
+      // Default: try image for unknown non-video
+      if (fmt != 'mp4') {
+        try {
+          await Gal.putImage(filePath, album: 'MediaDownload');
+        } catch (_) {}
+      }
     }
 
     return filePath;
