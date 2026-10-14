@@ -41,7 +41,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val remoteConfigRepo = RemoteConfigRepository(context)
     private val adManager = AdManager(context)
-    private val downloadEngine = MasterDownloadEngine()
+    private val downloadEngine = MasterDownloadEngine(context = context)
     private val fileDownloadService = FileDownloadService(context)
     private val downloadDao = AppDatabase.getInstance(context).downloadDao()
     private val appUpdateManager = AppUpdateManager(context)

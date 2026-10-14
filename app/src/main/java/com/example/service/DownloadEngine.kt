@@ -1,5 +1,6 @@
 package com.example.service
 
+import android.content.Context
 import android.net.Uri
 import android.util.Log
 import com.example.model.CarouselItem
@@ -567,81 +568,103 @@ class TikTokDownloader(private val client: OkHttpClient) {
  * - Engine 3: Multi-instance Cobalt API (api.cobalt.tools & co.wuk.sh)
  * - Fallbacks: Public GraphQL endpoint & OpenGraph / Direct Web Scraper
  */
-class InstagramDownloader(private val client: OkHttpClient) {
+class InstagramDownloader(
+    private val client: OkHttpClient,
+    private val context: Context? = null
+) {
     private val tag = "InstagramDownloader"
 
     suspend fun extract(url: String, config: RemoteConfigData): MediaResult = withContext(Dispatchers.IO) {
+        // --- Layer 0: URL Sanitizer & Normalizer ---
         val expandedUrl = UrlResolver.resolveRedirects(url)
-        val shortcode = extractShortcode(expandedUrl) ?: extractShortcode(url)
+        val (canonicalUrl, extractedShortcode) = normalizeInstagramUrl(expandedUrl)
+        val shortcode = extractedShortcode ?: extractShortcode(url)
             ?: throw IOException("Invalid Instagram URL format. Could not extract post shortcode.")
-        val isReel = isReelUrl(expandedUrl) || isReelUrl(url)
+        val isReel = isReelUrl(expandedUrl) || isReelUrl(url) || isReelUrl(canonicalUrl)
 
-        Log.d(tag, "Starting Zero-Session Instagram extraction for shortcode=$shortcode, isReel=$isReel (canonical=$expandedUrl)")
+        Log.d(tag, "Starting 3-Tier Zero-Session Instagram extraction for shortcode=$shortcode, isReel=$isReel (canonical=$canonicalUrl)")
 
-        // --- Tier 1: Direct Embed Endpoint Reverse-Engineering (Zero-Cookie, 100% Public) ---
+        // --- Layer 1: Fast API Rotation (Cobalt API v10, Direct Embed Reverse-Engineering, Public GraphQL) ---
+        // 1.A: Multi-instance Cobalt API v10 rotation with HTTP/2 & JSON payload
         try {
-            val embedResult = tryInstagramEmbed(expandedUrl, shortcode, isReel)
-            if (embedResult != null) {
-                Log.d(tag, "Tier 1 (Direct Embed) extracted successfully: ${embedResult.videoUrl}")
-                return@withContext embedResult
-            }
-        } catch (e: Exception) {
-            Log.w(tag, "Tier 1 (Direct Embed) failed: ${e.message}")
-        }
-
-        // --- Tier 2: Public Anonymous GraphQL Query (Polaris doc_id 8845758582119845) ---
-        try {
-            val graphResult = tryInstagramGraphQLQuery(expandedUrl, shortcode, isReel)
-            if (graphResult != null) {
-                Log.d(tag, "Tier 2 (Public GraphQL) extracted successfully: ${graphResult.videoUrl}")
-                return@withContext graphResult
-            }
-        } catch (e: Exception) {
-            Log.w(tag, "Tier 2 (Public GraphQL) failed: ${e.message}")
-        }
-
-        // --- Tier 3: External Public Extraction Proxies (FastDL, SaveIG, VXInstagram) ---
-        try {
-            val proxyResult = tryInstagramExternalProxies(expandedUrl, shortcode, isReel)
-            if (proxyResult != null) {
-                Log.d(tag, "Tier 3 (External Proxies) extracted successfully: ${proxyResult.videoUrl}")
-                return@withContext proxyResult
-            }
-        } catch (e: Exception) {
-            Log.w(tag, "Tier 3 (External Proxies) failed: ${e.message}")
-        }
-
-        // --- Tier 4: Multi-instance Cobalt API (with Carousel Picker Expansion) ---
-        try {
-            val cobaltResult = tryCobaltInstagram(expandedUrl, isReel, config)
+            val cobaltResult = tryCobaltInstagram(canonicalUrl, isReel, config)
             if (cobaltResult != null) {
-                Log.d(tag, "Tier 4 (Cobalt API) extracted successfully: ${cobaltResult.videoUrl}")
+                Log.d(tag, "Layer 1.A (Cobalt API) extracted successfully: ${cobaltResult.videoUrl}")
                 return@withContext cobaltResult
             }
         } catch (e: Exception) {
-            Log.w(tag, "Tier 4 (Cobalt API) failed: ${e.message}")
+            Log.w(tag, "Layer 1.A (Cobalt API) failed: ${e.message}")
         }
 
-        // --- Tier 5: Direct Mobile/Web Public API (__a=1 & media/info) ---
+        // 1.B: Direct Embed Endpoint Reverse-Engineering (Zero-Cookie, 100% Public)
         try {
-            val apiResult = tryInstagramApiJson(expandedUrl, shortcode, isReel)
+            val embedResult = tryInstagramEmbed(canonicalUrl, shortcode, isReel)
+            if (embedResult != null) {
+                Log.d(tag, "Layer 1.B (Direct Embed) extracted successfully: ${embedResult.videoUrl}")
+                return@withContext embedResult
+            }
+        } catch (e: Exception) {
+            Log.w(tag, "Layer 1.B (Direct Embed) failed: ${e.message}")
+        }
+
+        // 1.C: Public Anonymous GraphQL Query (Polaris doc_id 8845758582119845)
+        try {
+            val graphResult = tryInstagramGraphQLQuery(canonicalUrl, shortcode, isReel)
+            if (graphResult != null) {
+                Log.d(tag, "Layer 1.C (Public GraphQL) extracted successfully: ${graphResult.videoUrl}")
+                return@withContext graphResult
+            }
+        } catch (e: Exception) {
+            Log.w(tag, "Layer 1.C (Public GraphQL) failed: ${e.message}")
+        }
+
+        // 1.D: External Public Extraction Proxies (FastDL, SaveIG, VXInstagram)
+        try {
+            val proxyResult = tryInstagramExternalProxies(canonicalUrl, shortcode, isReel)
+            if (proxyResult != null) {
+                Log.d(tag, "Layer 1.D (External Proxies) extracted successfully: ${proxyResult.videoUrl}")
+                return@withContext proxyResult
+            }
+        } catch (e: Exception) {
+            Log.w(tag, "Layer 1.D (External Proxies) failed: ${e.message}")
+        }
+
+        // --- Layer 2: Headless Local Engine (Residential IP on Device) ---
+        // When cloud server IPs are blocked with 403 login_required, the on-device headless engine
+        // navigates via the user's residential IP to capture direct CDN .mp4 streams & DOM video tags.
+        if (context != null) {
+            try {
+                Log.d(tag, "Activating Layer 2 (Headless Local Engine) with Residential IP...")
+                val headlessResult = HeadlessInstagramExtractor(context).extract(canonicalUrl, shortcode, isReel)
+                if (headlessResult != null) {
+                    Log.d(tag, "Layer 2 (Headless Local Engine) successfully extracted: ${headlessResult.videoUrl}")
+                    return@withContext headlessResult
+                }
+            } catch (e: Exception) {
+                Log.w(tag, "Layer 2 (Headless Local Engine) failed: ${e.message}")
+            }
+        }
+
+        // --- Layer 3: Direct Mobile/Web Public API (__a=1 & media/info) ---
+        try {
+            val apiResult = tryInstagramApiJson(canonicalUrl, shortcode, isReel)
             if (apiResult != null) {
-                Log.d(tag, "Tier 5 (Public API JSON) extracted successfully: ${apiResult.videoUrl}")
+                Log.d(tag, "Layer 3 (Public API JSON) extracted successfully: ${apiResult.videoUrl}")
                 return@withContext apiResult
             }
         } catch (e: Exception) {
-            Log.w(tag, "Tier 5 (Public API JSON) failed: ${e.message}")
+            Log.w(tag, "Layer 3 (Public API JSON) failed: ${e.message}")
         }
 
-        // --- Tier 6: Universal Web/OpenGraph Extractor (STRICTLY GUARDED: Never for Reels) ---
+        // Final Fallback for Static Posts only (Strictly forbidden for Reels/Videos)
         if (!isReel) {
             try {
-                val webResult = DirectWebExtractor(client).extract(expandedUrl, config)
+                val webResult = DirectWebExtractor(client).extract(canonicalUrl, config)
                 if (webResult.videoUrl.isNotBlank()) {
                     return@withContext webResult
                 }
             } catch (e: Exception) {
-                Log.w(tag, "Tier 6 (Universal Web) failed: ${e.message}")
+                Log.w(tag, "Universal Web fallback failed: ${e.message}")
             }
         }
 
@@ -651,8 +674,25 @@ class InstagramDownloader(private val client: OkHttpClient) {
         )
     }
 
-    private fun extractShortcode(url: String): String? {
-        val matcher = Pattern.compile("/(?:p|reel|reels|tv)/([A-Za-z0-9_-]+)", Pattern.CASE_INSENSITIVE).matcher(url)
+    /**
+     * Layer 0: Strips tracking parameters (?igsh=..., ?utm_source=..., etc.)
+     * and normalizes /share/, /reel/, /p/, /tv/ URLs to clean canonical shortcode URLs.
+     */
+    fun normalizeInstagramUrl(url: String): Pair<String, String?> {
+        val clean = url.replace(Regex("[?&](igsh|igshid|utm_[^&=]+|fbclid)=[^&#]*", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("\\?&"), "?")
+            .trimEnd('?', '&')
+        val shortcode = extractShortcode(clean)
+        val isReel = isReelUrl(clean)
+        val canonical = if (shortcode != null) {
+            if (isReel) "https://www.instagram.com/reel/$shortcode/"
+            else "https://www.instagram.com/p/$shortcode/"
+        } else clean
+        return Pair(canonical, shortcode)
+    }
+
+    fun extractShortcode(url: String): String? {
+        val matcher = Pattern.compile("/(?:p|reel|reels|share|tv)/([A-Za-z0-9_-]+)", Pattern.CASE_INSENSITIVE).matcher(url)
         if (matcher.find()) return matcher.group(1)
         val direct = Pattern.compile("^[A-Za-z0-9_-]{9,15}$").matcher(url.trim())
         if (direct.find()) return direct.group(0)
@@ -2217,13 +2257,14 @@ class MasterDownloadEngine(
         .readTimeout(20, TimeUnit.SECONDS)
         .followRedirects(true)
         .followSslRedirects(true)
-        .build()
+        .build(),
+    private val context: Context? = null
 ) {
     private val tiktok = TikTokDownloader(client)
     private val pinterest = PinterestDownloader(client)
     private val twitter = TwitterDownloader(client)
     private val facebook = FacebookDownloader(client)
-    private val instagram = InstagramDownloader(client)
+    private val instagram = InstagramDownloader(client, context)
     private val cobalt = CobaltDownloader(client)
     private val webExtractor = DirectWebExtractor(client)
 
