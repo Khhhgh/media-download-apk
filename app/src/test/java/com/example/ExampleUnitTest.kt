@@ -81,4 +81,18 @@ class ExampleUnitTest {
         val socialShare = "Amazing pin! Check it out: https://pin.it/7abcXYZ (via Pinterest)"
         assertEquals("https://pin.it/7abcXYZ", UrlResolver.sanitizeAndExtractUrl(socialShare))
     }
+
+    @Test
+    fun testInstagramShortcodeAndReelDetection() {
+        val reelPattern = Pattern.compile("/(?:reel|reels|tv)/([A-Za-z0-9_-]+)", Pattern.CASE_INSENSITIVE)
+        assertTrue(reelPattern.matcher("https://www.instagram.com/reel/C8qV186s83l/").find())
+        assertTrue(reelPattern.matcher("https://www.instagram.com/reels/C8qV186s83l/").find())
+        assertTrue(reelPattern.matcher("https://www.instagram.com/tv/C8qV186s83l/").find())
+        assertFalse(reelPattern.matcher("https://www.instagram.com/p/C8qV186s83l/").find())
+
+        val anyPostPattern = Pattern.compile("/(?:p|reel|reels|tv)/([A-Za-z0-9_-]+)", Pattern.CASE_INSENSITIVE)
+        val m = anyPostPattern.matcher("https://www.instagram.com/reel/C8qV186s83l/?igsh=xyz")
+        assertTrue(m.find())
+        assertEquals("C8qV186s83l", m.group(1))
+    }
 }

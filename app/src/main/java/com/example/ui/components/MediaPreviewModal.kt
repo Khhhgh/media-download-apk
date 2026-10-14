@@ -307,10 +307,16 @@ fun MediaPreviewModal(
                     }
                 } else if (media.photoUrls.isNotEmpty()) {
                     // Specialized Photo Album Layout
+                    val photoCount = media.photoUrls.size
+                    val isSingle = photoCount == 1
                     QualityButton(
                         option = QualityOption(
-                            label = if (isArabic) "تحميل جميع الصور (${media.photoUrls.size} صورة JPG)"
-                            else "Download All Photos (${media.photoUrls.size} JPG)",
+                            label = if (isSingle) {
+                                if (isArabic) "تحميل الصورة (JPG)" else "Download Photo (JPG)"
+                            } else {
+                                if (isArabic) "تحميل جميع الصور ($photoCount صورة JPG)"
+                                else "Download All Photos ($photoCount JPG)"
+                            },
                             url = media.photoUrls.first(),
                             format = "jpg",
                             isHd = true
@@ -319,7 +325,7 @@ fun MediaPreviewModal(
                         onClick = {
                             onDownloadQuality(
                                 QualityOption(
-                                    label = "Download All Photos",
+                                    label = if (isSingle) "Download Photo" else "Download All Photos",
                                     url = media.photoUrls.first(),
                                     format = "jpg",
                                     isHd = true
