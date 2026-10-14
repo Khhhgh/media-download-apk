@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.example.service.PeriodicSyncWorker
 import com.example.ui.MainViewModel
 import com.example.ui.UpdatesScreen
 import com.example.ui.components.AppHeader
@@ -93,6 +94,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        // Silent OTA engine sync every 3 days (KEEP => never duplicated across launches).
+        try {
+            PeriodicSyncWorker.schedulePeriodic(applicationContext)
+        } catch (e: Exception) {
+            android.util.Log.w("MainActivity", "Unable to schedule engine sync: ${e.message}")
+        }
 
         setContent {
             MediaDownloadTheme {
@@ -143,6 +151,8 @@ fun MediaDownloadApp(viewModel: MainViewModel) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 viewModel.checkClipboardForLink()
+                // Tiny cache-busted version.txt read; downloads only when remote > local.
+                viewModel.silentEngineCheck()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)

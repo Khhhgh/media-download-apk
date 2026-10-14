@@ -2,22 +2,24 @@ package com.example.service
 
 import android.content.Context
 import android.util.Log
+import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
-import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
-import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import java.util.concurrent.TimeUnit
 
 /**
- * Silent background synchronisation of the Python engines every 12 hours.
+ * Silent background synchronisation of the Python engines every 3 days.
  *
  * WorkManager only *schedules* this work: actual execution depends on system/battery/network
- * constraints, so it is not guaranteed to run at an exact wall-clock time.
+ * constraints, so it is not guaranteed to run at an exact wall-clock time. The in-app silent
+ * check at every launch ([com.example.ui.MainViewModel.silentEngineCheck]) covers the gaps.
+ *
+ * (The class keeps its historical name so jobs already persisted by older builds still resolve.)
  */
 class PeriodicSyncWorker(
     context: Context,
@@ -33,58 +35,52 @@ class PeriodicSyncWorker(
                 Result.success()
             } else {
                 Log.w(TAG, "Periodic engine sync failed: ${result.error}")
-                // Transient failures (network/HTTP) are retried with the configured backoff.
-                Result.retry()
+                // Transient failures are retried with backoff, but never hammer the CDN.
+                if (runAttemptCount >= MAX_ATTEMPTS) Result.success() else Result.retry()
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.w(TAG, "Periodic engine sync crashed: ${e.message}")
-            Result.retry()
+            if (runAttemptCount >= MAX_ATTEMPTS) Result.success() else Result.retry()
         }
     }
 
     companion object {
         private const val TAG = "PeriodicSyncWorker"
-        const val PERIODIC_WORK_NAME = "engine_periodic_sync"
-        const val BOOT_CHECK_WORK_NAME = "engine_boot_check"
-        private const val INTERVAL_HOURS = 12L
 
-        /** Schedules the recurring 12h sync. Uses KEEP so no duplicate work is ever enqueued. */
+        /** Unique-work name of the 3-day schedule. */
+        const val PERIODIC_WORK_NAME = "EnginePeriodicSync"
+
+        /** Unique-work names used by older builds (12h schedule / boot check). */
+        private const val LEGACY_PERIODIC_NAME = "engine_periodic_sync"
+        private const val LEGACY_BOOT_CHECK_NAME = "engine_boot_check"
+
+        private const val INTERVAL_DAYS = 3L
+        private const val MAX_ATTEMPTS = 3
+
+        /**
+         * Schedules the recurring 3-day sync. KEEP means no duplicate work is ever enqueued;
+         * the legacy 12h job from older builds is cancelled so upgraded installs don't keep it.
+         */
         fun schedulePeriodic(context: Context) {
+            val workManager = WorkManager.getInstance(context)
+            workManager.cancelUniqueWork(LEGACY_PERIODIC_NAME)
+            workManager.cancelUniqueWork(LEGACY_BOOT_CHECK_NAME)
+
             val constraints = Constraints.Builder()
                 .setRequiredNetworkType(NetworkType.CONNECTED)
                 .build()
             val request = PeriodicWorkRequestBuilder<PeriodicSyncWorker>(
-                INTERVAL_HOURS, TimeUnit.HOURS,
-                15, TimeUnit.MINUTES
+                INTERVAL_DAYS, TimeUnit.DAYS,
+                6, TimeUnit.HOURS
             )
                 .setConstraints(constraints)
-                .setBackoffCriteria(
-                    androidx.work.BackoffPolicy.EXPONENTIAL,
-                    30, TimeUnit.MINUTES
-                )
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.MINUTES)
                 .build()
-            WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+            workManager.enqueueUniquePeriodicWork(
                 PERIODIC_WORK_NAME,
                 ExistingPeriodicWorkPolicy.KEEP,
-                request
-            )
-        }
-
-        /** Runs a single check at startup if the last successful check is older than 12h. */
-        fun scheduleBootCheckIfStale(context: Context) {
-            val manager = EngineUpdateManager(context)
-            val elapsed = System.currentTimeMillis() - manager.lastCheckTime
-            if (elapsed < TimeUnit.HOURS.toMillis(INTERVAL_HOURS)) return
-
-            val constraints = Constraints.Builder()
-                .setRequiredNetworkType(NetworkType.CONNECTED)
-                .build()
-            val request = OneTimeWorkRequestBuilder<PeriodicSyncWorker>()
-                .setConstraints(constraints)
-                .build()
-            WorkManager.getInstance(context).enqueueUniqueWork(
-                BOOT_CHECK_WORK_NAME,
-                ExistingWorkPolicy.KEEP,
                 request
             )
         }

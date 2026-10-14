@@ -19,6 +19,7 @@ import com.example.model.QualityOption
 import com.example.model.RemoteConfigData
 import com.example.service.AdManager
 import com.example.service.AppUpdateManager
+import com.example.service.EngineUpdateManager
 import com.example.service.FileDownloadService
 import com.example.service.FirstRunProgress
 import com.example.service.FirstRunSetupManager
@@ -49,6 +50,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val downloadDao = AppDatabase.getInstance(context).downloadDao()
     private val appUpdateManager = AppUpdateManager(context)
     private val firstRunSetupManager = FirstRunSetupManager(context)
+    private val engineUpdateManager = EngineUpdateManager(context)
+    private var engineCheckJob: Job? = null
+    private var lastEngineCheckAt = 0L
 
     private val _showFirstRunSetup = MutableStateFlow(firstRunSetupManager.shouldRunSetup())
     val showFirstRunSetup: StateFlow<Boolean> = _showFirstRunSetup.asStateFlow()
@@ -120,8 +124,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Runs the first-run engine setup (bundled install + OTA + verification) without blocking the
-     * UI. Safe to call repeatedly (e.g. from the retry button).
+     * Silent launch check: reads the cache-busted `version.txt` and, only if the remote version is
+     * newer, downloads + atomically swaps the engines with no UI. If the app is still on the
+     * offline fallback and a connection is now available, provisioning is retried instead.
+     * Throttled so repeated resumes don't hit the CDN.
+     */
+    fun silentEngineCheck() {
+        if (_showFirstRunSetup.value) return
+        if (engineCheckJob?.isActive == true) return
+        val now = System.currentTimeMillis()
+        if (now - lastEngineCheckAt < ENGINE_CHECK_THROTTLE_MS) return
+        lastEngineCheckAt = now
+
+        engineCheckJob = viewModelScope.launch {
+            try {
+                if (!firstRunSetupManager.isProvisioned) {
+                    if (firstRunSetupManager.isOnline()) {
+                        val r = firstRunSetupManager.runSetup { }
+                        Log.i("MainViewModel", "Deferred provisioning: provisioned=${r.provisioned} v=${r.version}")
+                    }
+                } else {
+                    val r = engineUpdateManager.checkAndUpdate()
+                    Log.i("MainViewModel", "Silent engine check: ok=${r.success} updated=${r.updated} v=${r.activeVersion} err=${r.error}")
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w("MainViewModel", "Silent engine check failed: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Runs the first-run provisioning (download latest engines from the CDN, prepare libraries,
+     * verify) off the main thread; the dialog only observes progress. The bundled engines are used
+     * only as an offline last resort. Safe to call repeatedly (e.g. from the retry button).
      */
     fun startFirstRunSetup() {
         if (firstRunJob?.isActive == true) return
@@ -133,6 +170,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (result.success) {
                 _showFirstRunSetup.value = false
                 _firstRunProgress.value = null
+                if (!result.provisioned) {
+                    // Offline last resort: bundled engines in use until a connection is available.
+                    emitToast(
+                        if (_isArabic.value) {
+                            "تعذر تنزيل أحدث المحركات (${result.error ?: "لا يوجد اتصال"}). " +
+                                "نعمل مؤقتاً بالنسخة المدمجة وسيُعاد التحديث عند توفر الاتصال."
+                        } else {
+                            "Couldn't download the latest engines (${result.error ?: "offline"}). " +
+                                "Using the built-in copy for now; it will update once you're online."
+                        }
+                    )
+                }
             } else {
                 _firstRunError.value = result.error ?: "فشل التهيئة الأولية"
             }
@@ -239,13 +288,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: YouTubeBlockedException) {
                 _showYouTubeBlockedDialog.value = true
             } catch (e: Exception) {
-                // MasterDownloadEngine.resolveMedia already reports the failure with the real reason.
+                // Show the engine's own exception text so experimental/engine errors are visible.
                 Log.e("MainViewModel", "Extraction failed", e)
-                val msg = if (_isArabic.value) {
-                    "فشل استخراج الرابط. جاري تجربة المحركات الاحتياطية أو تأكد من أن الرابط عام وليس خاص."
-                } else {
-                    "Failed to extract media: ${e.message ?: "Unknown error"}. Make sure the link is public."
-                }
+                val reason = (e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName).take(500)
+                val msg = if (_isArabic.value) "فشل الاستخراج: $reason" else "Extraction failed: $reason"
                 emitToast(msg)
             } finally {
                 _isExtracting.value = false
@@ -571,5 +617,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             bytes >= 1024 -> String.format(Locale.US, "%.0f KB", bytes / 1024.0)
             else -> "$bytes B"
         }
+    }
+
+    private companion object {
+        /** Minimum gap between in-app silent engine checks (each is a ~1-byte request). */
+        const val ENGINE_CHECK_THROTTLE_MS = 15 * 60 * 1000L
     }
 }

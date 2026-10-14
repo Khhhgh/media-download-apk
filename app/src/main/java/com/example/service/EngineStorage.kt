@@ -11,7 +11,8 @@ import java.io.IOException
  * Layout (all under the app's private storage, resolved dynamically from [Context.filesDir];
  * no hard-coded "/data/data/..." paths anywhere):
  *
- *   filesDir/active_engines/      <- active engine tree (bundled or OTA-updated)
+ *   filesDir/active_engines/      <- active engine tree (OTA-downloaded; bundled copy only offline)
+ *   filesDir/active_engines.new/  <- fully validated tree waiting for the final same-dir swap
  *   filesDir/active_engines.bak/  <- previous known-good tree, kept until an update succeeds
  *   filesDir/site-packages/       <- dynamically installed pure-Python packages
  *   cacheDir/temp_engines/        <- staging area for OTA downloads
@@ -24,9 +25,26 @@ object EngineStorage {
 
     fun activeEnginesDir(context: Context): File = File(context.filesDir, "active_engines")
     fun backupEnginesDir(context: Context): File = File(context.filesDir, "active_engines.bak")
+    fun incomingEnginesDir(context: Context): File = File(context.filesDir, "active_engines.new")
     fun sitePackagesDir(context: Context): File = File(context.filesDir, "site-packages")
     fun stagingDir(context: Context): File = File(context.cacheDir, "temp_engines")
     fun lockFile(context: Context): File = File(context.filesDir, ".engine_update.lock")
+
+    /**
+     * If the process died between "active -> backup" and "incoming -> active" during a swap,
+     * restores the previous known-good tree so the app never ends up with no engines at all.
+     */
+    fun recoverInterruptedSwap(context: Context) {
+        try {
+            val active = activeEnginesDir(context)
+            val backup = backupEnginesDir(context)
+            if (!active.exists() && backup.exists()) {
+                if (backup.renameTo(active)) Log.w(TAG, "Recovered engines from interrupted swap")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Swap recovery failed: ${e.message}")
+        }
+    }
 
     /** Reads the locally active engine version, or 0 if none is installed. */
     fun readActiveVersion(context: Context): Int {
@@ -83,7 +101,10 @@ object EngineStorage {
         }
     }
 
-    /** Installs the engines bundled in the APK the very first time the app runs. */
+    /**
+     * OFFLINE LAST RESORT ONLY: copies the engines bundled in the APK when no engine tree exists
+     * and the network could not provide one. Online flows must never call this first.
+     */
     fun installBundledIfNeeded(context: Context): Boolean {
         if (isInstalled(context)) return false
         return try {

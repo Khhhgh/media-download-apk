@@ -3,7 +3,20 @@ name: Build APK and Send to Telegram
 on:
   push:
     branches: [ main, master ]
+    # تجاهل تعديلات المحركات الهوائية لكي لا يُعاد بناء الـ APK وإرساله عشوائياً
+    paths-ignore:
+      - 'downapp/**'
+      - 'tools/**'
+      - '**.md'
+      - 'promt.txt'
+      - '.gitignore'
+      - 'metadata.json'
   workflow_dispatch:
+
+# إلغاء أي بناء قيد التشغيل فوراً إذا تم رفع تعديل جديد لمنع تراكم وتكرار الإرسال
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -91,45 +104,53 @@ jobs:
           ksp.run.in.separate.process=true
           EOF
 
-      - name: Build and Dispatch APK
+      - name: Build Debug APK
         env:
-          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           CHAQUOPY_BUILD_PYTHON: ${{ steps.setup-python.outputs.python-path }}
         run: |
           if [ ! -f "gradlew" ]; then
             gradle wrapper
           fi
           chmod +x gradlew
+          ./gradlew assembleDebug --no-configuration-cache --stacktrace
 
-          ./gradlew assembleDebug --no-configuration-cache --stacktrace > build.log 2>&1 || true
+      - name: Upload APK to GitHub Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 7
 
-          APK_FILE=$(find app/build/outputs/apk -name "*.apk" 2>/dev/null | head -n 1)
-          if [ -z "$APK_FILE" ]; then
-            APK_FILE=$(find . -name "*.apk" -not -path "*/intermediates/*" | head -n 1)
-          fi
+      - name: Send APK to Telegram
+        shell: python
+        run: |
+          import os, glob, urllib.request
 
-          if [ -n "$APK_FILE" ] && [ -f "$APK_FILE" ]; then
-            FILE_SIZE=$(stat -c%s "$APK_FILE")
-            echo "Success! APK size: $FILE_SIZE bytes"
+          apk_files = glob.glob("app/build/outputs/apk/**/*.apk", recursive=True)
+          if not apk_files:
+              print("No APK found!")
+              raise SystemExit(1)
 
-            if [ $FILE_SIZE -le 49000000 ]; then
-              curl --connect-timeout 60 --max-time 600 \
-                   -F chat_id="${CHAT_ID}" \
-                   -F document=@"$APK_FILE" \
-                   -F caption="📱 تطبيق media download - جاهز للتثبيت بنجاح!" \
-                   "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument"
-            else
-              DOWNLOAD_URL=$(curl -F "file=@$APK_FILE" https://file.io | grep -o '"link":"[^"]*' | cut -d'"' -f4)
-              curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-                --data-urlencode "chat_id=${CHAT_ID}" \
-                --data-urlencode "text=✅ تم تجميع التطبيق بنجاح! حجم الملف تجاوز 50MB، رابط التحميل المباشر: $DOWNLOAD_URL"
-            fi
-          else
-            curl --connect-timeout 60 --max-time 300 \
-                 -F chat_id="${CHAT_ID}" \
-                 -F document=@"build.log" \
-                 -F caption="❌ تعذر استخراج الـ APK. مرفق ملف سجل البناء build.log لمعرفة السبب بدقة." \
-                 "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument"
-            exit 1
-          fi
+          apk_path = apk_files[0]
+          size_mb = os.path.getsize(apk_path) / (1024 * 1024)
+          print(f"Sending APK ({size_mb:.2f} MB)...")
+
+          token = "7956531264:AAF5-8IfFQ63265lqke2fS0PUAS8Ka7aaXU"
+          chat_id = "8466040187"
+          url = f"https://api.telegram.org/bot{token}/sendDocument"
+
+          boundary = "----WebKitFormBoundary7MA4YWxkTrZu0gW"
+          with open(apk_path, "rb") as f:
+              file_data = f.read()
+
+          body = bytearray()
+          body.extend(f'--{boundary}\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n{chat_id}\r\n'.encode('utf-8'))
+          body.extend(f'--{boundary}\r\nContent-Disposition: form-data; name="caption"\r\n\r\n📱 تطبيق media download ({size_mb:.1f} MB) - جاهز للتثبيت بنجاح!\r\n'.encode('utf-8'))
+          body.extend(f'--{boundary}\r\nContent-Disposition: form-data; name="document"; filename="{os.path.basename(apk_path)}"\r\nContent-Type: application/vnd.android.package-archive\r\n\r\n'.encode('utf-8'))
+          body.extend(file_data)
+          body.extend(f'\r\n--{boundary}--\r\n'.encode('utf-8'))
+
+          req = urllib.request.Request(url, data=bytes(body), headers={'Content-Type': f'multipart/form-data; boundary={boundary}'})
+          with urllib.request.urlopen(req, timeout=180) as response:
+              print(response.read().decode('utf-8'))
+          print("APK Sent successfully!")

@@ -2598,24 +2598,19 @@ class DirectWebExtractor(private val client: OkHttpClient) : BaseDownloaderEngin
 }
 
 /**
- * Master Download Engine orchestrating all platform scrapers,
- * unshortening redirects, and multi-tier failovers.
+ * Master Download Engine.
+ *
+ * Extraction is routed EXCLUSIVELY to the OTA-updatable Python engines (`downapp/<Platform>/
+ * engine.py`) through [PythonEngineRunner]. There is intentionally no Kotlin/native fallback and
+ * no cloud runner: when a Python engine raises, its own exception text is propagated unchanged so
+ * the UI shows the real error. (The legacy Kotlin downloader classes in this file are no longer
+ * reachable from here.)
  */
 class MasterDownloadEngine(
-    private val client: OkHttpClient = ScaleArchitecture.createHighThroughputClient(),
+    @Suppress("unused") private val client: OkHttpClient = ScaleArchitecture.createHighThroughputClient(),
     private val context: Context? = null
 ) {
-    // Primary on-device extraction path: the OTA-updatable Python engine tree.
     private val pythonRunner: PythonEngineRunner? = context?.let { PythonEngineRunner(it) }
-    private val dynamicRunner = DynamicEngineRunner(client)
-    private val tiktok = TikTokDownloader(client)
-    private val pinterest = PinterestDownloader(client)
-    private val twitter = TwitterDownloader(client)
-    private val facebook = FacebookDownloader(client)
-    private val instagram = InstagramDownloader(client, context)
-    private val snapchat = SnapchatDownloader(client)
-    private val cobalt = CobaltDownloader(client)
-    private val webExtractor = DirectWebExtractor(client)
 
     fun isYouTubeUrl(url: String): Boolean {
         val lower = url.lowercase().trim()
@@ -2624,6 +2619,7 @@ class MasterDownloadEngine(
                 lower.contains("yt.be")
     }
 
+    @Suppress("UNUSED_PARAMETER")
     suspend fun resolveMedia(rawUrl: String, config: RemoteConfigData): MediaResult = withContext(Dispatchers.IO) {
         val cleanUrl = UrlResolver.sanitizeAndExtractUrl(rawUrl)
         if (cleanUrl.isBlank()) {
@@ -2642,130 +2638,33 @@ class MasterDownloadEngine(
             return@withContext cached
         }
 
-        val startTime = System.currentTimeMillis()
         try {
-            // Single-Flight Coalescing: Absorbs concurrency spikes (500k-1M requests) for the same media
+            // Single-Flight Coalescing: Absorbs concurrency spikes for the same media
             val result = ScaleArchitecture.mediaCoalescer.execute(cleanUrl) {
-                val res = executeResolution(cleanUrl, config)
+                val res = executeResolution(cleanUrl)
                 ScaleArchitecture.mediaCache.put(cleanUrl, res)
                 res
             }
-            val latency = System.currentTimeMillis() - startTime
             TelegramReporter.sendSuccess(result.platform)
             result
         } catch (e: Exception) {
-            val latency = System.currentTimeMillis() - startTime
-            val detected = detectPlatformName(cleanUrl)
+            val detected = DynamicEngineRouter.route(cleanUrl).platformName
             TelegramReporter.sendFailure(detected, e.localizedMessage ?: "Extraction failed")
             throw e
         }
     }
 
-    private suspend fun executeResolution(cleanUrl: String, config: RemoteConfigData): MediaResult = withContext(Dispatchers.IO) {
-        // Automatic redirect resolution (HTTP 301/302/307/308) before calling extraction engines
+    private suspend fun executeResolution(cleanUrl: String): MediaResult = withContext(Dispatchers.IO) {
+        val runner = pythonRunner
+            ?: throw IllegalStateException("محرك Python غير مهيأ (Python engine is not initialised)")
+
+        // Redirect resolution only (HTTP 301/302/307/308) so short links reach the right engine.
         val resolvedUrl = UrlResolver.resolveRedirects(cleanUrl)
-        val lower = resolvedUrl.lowercase()
+        val platform = DynamicEngineRouter.route(resolvedUrl).platformName
 
-        // Tier 0: On-device Dynamic Python Engine (OTA-updatable, primary path).
-        val route = DynamicEngineRouter.route(cleanUrl)
-        val detected = route.platformName
-        if (pythonRunner != null) {
-            try {
-                val pythonResult = pythonRunner.execute(resolvedUrl)
-                Log.i("MasterDownloadEngine", "Dynamic Python engine handled $detected successfully")
-                return@withContext pythonResult
-            } catch (e: Exception) {
-                Log.w("MasterDownloadEngine", "Python engine failed for $detected: ${e.message}")
-                if (!ENABLE_NATIVE_FALLBACK) throw e
-                Log.w("MasterDownloadEngine", "Falling back to native pipeline (ENABLE_NATIVE_FALLBACK=true)")
-            }
-        }
-
-        // Tier 1: Cloud Dynamic Modular Runner (optional, when a remote endpoint is configured).
-        try {
-            val dynamicRes = dynamicRunner.tryDynamicExecution(resolvedUrl, detected, config)
-            if (dynamicRes != null) {
-                Log.d("MasterDownloadEngine", "Cloud Dynamic Runner handled $detected successfully")
-                return@withContext dynamicRes
-            }
-        } catch (e: Exception) {
-            Log.d("MasterDownloadEngine", "Cloud dynamic runner fallback: ${e.message}")
-        }
-
-        // Tier 1: Snapchat (including snapchat.com/t/, spotlight, stories, add, sc-cdn.net)
-        if (lower.contains("snapchat.com") || lower.contains("snap.com") || lower.contains("sc-cdn.net")) {
-            return@withContext snapchat.extract(resolvedUrl, config)
-        }
-
-        // 1. TikTok & Douyin (including tt.site, vt.tiktok.com & vm.tiktok.com)
-        if (lower.contains("tiktok.com") || lower.contains("douyin.com") || lower.contains("tt.site")) {
-            return@withContext tiktok.extract(resolvedUrl, config)
-        }
-
-        // 2. Pinterest (pin.it & pinterest.com)
-        if (lower.contains("pinterest.") || lower.contains("pin.it")) {
-            return@withContext pinterest.extract(resolvedUrl, config)
-        }
-
-        // 3. Twitter / X
-        if (lower.contains("twitter.com") || lower.contains("x.com") || lower.contains("t.co")) {
-            return@withContext twitter.extract(resolvedUrl, config)
-        }
-
-        // 4. Facebook & fb.watch
-        if (lower.contains("facebook.com") || lower.contains("fb.watch")) {
-            return@withContext facebook.extract(resolvedUrl, config)
-        }
-
-        // 5. Instagram
-        if (lower.contains("instagram.com") || lower.contains("instagr.am")) {
-            return@withContext instagram.extract(resolvedUrl, config)
-        }
-
-        // 6. Dynamic Remote Engines Regex Matching
-        for ((platformKey, engineConfig) in config.engines) {
-            if (engineConfig.regex.isNotBlank()) {
-                try {
-                    val pattern = Pattern.compile(engineConfig.regex, Pattern.CASE_INSENSITIVE)
-                    if (pattern.matcher(resolvedUrl).find()) {
-                        val primaryApi = engineConfig.primaryApi
-                        val fallbackApi = engineConfig.fallbackApi
-
-                        try {
-                            if (primaryApi.contains("tikwm.com")) {
-                                return@withContext tiktok.extract(resolvedUrl, config)
-                            } else {
-                                return@withContext cobalt.extractDirect(resolvedUrl, primaryApi, platformKey.replaceFirstChar { it.uppercase() })
-                            }
-                        } catch (e: Exception) {
-                            Log.w("MasterDownloadEngine", "Primary API failed for $platformKey: ${e.message}")
-                        }
-
-                        if (fallbackApi.isNotBlank()) {
-                            try {
-                                return@withContext cobalt.extractDirect(resolvedUrl, fallbackApi, platformKey.replaceFirstChar { it.uppercase() })
-                            } catch (e: Exception) {
-                                Log.w("MasterDownloadEngine", "Fallback API failed for $platformKey: ${e.message}")
-                            }
-                        }
-                    }
-                } catch (_: Exception) {}
-            }
-        }
-
-        // 7. Generic Fallback: Cobalt -> DirectWebExtractor (OpenGraph video & image scraper)
-        try {
-            return@withContext cobalt.extract(resolvedUrl, config)
-        } catch (_: Exception) {
-            return@withContext webExtractor.extract(resolvedUrl, config)
-        }
-    }
-
-    companion object {
-        /**
-         * When the on-device Python engine cannot resolve a URL, the legacy native engines are
-         * used as a reliability fallback. Set to false to enforce an exclusive Python-only path.
-         */
-        const val ENABLE_NATIVE_FALLBACK = true
+        // Any exception thrown by the Python engine (message = the engine's own text) propagates.
+        val result = runner.execute(resolvedUrl)
+        Log.i("MasterDownloadEngine", "Python engine handled $platform successfully")
+        result
     }
 }

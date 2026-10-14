@@ -91,8 +91,8 @@ fun FirstRunSetupDialog(
                     )
                     Spacer(Modifier.height(16.dp))
                     Text(
-                        text = if (isArabic) "انتظر جارِ تثبيت المكاتب والمحركات بأحدث إصدار"
-                        else "Please wait, installing libraries and engines",
+                        text = if (isArabic) "جارِ تهيئة وإعداد محركات التحميل بأحدث إصدار..."
+                        else "Setting up the download engines with the latest version...",
                         color = CyberTextPrimary,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,
@@ -155,9 +155,15 @@ fun FirstRunSetupDialog(
                         }
                         Spacer(Modifier.height(6.dp))
                         val speed = progress?.bytesPerSecond ?: 0L
-                        if (speed > 0) {
+                        val total = progress?.totalBytes ?: 0L
+                        if (speed > 0 || total > 0) {
+                            val sizeText = if (total > 0) {
+                                "${(progress?.downloadedBytes ?: 0L) / 1024} / ${total / 1024} KB"
+                            } else ""
                             Text(
-                                text = formatSpeed(speed),
+                                text = listOf(sizeText, formatSpeed(speed))
+                                    .filter { it.isNotBlank() }
+                                    .joinToString("  •  "),
                                 color = CyberTextSecondary,
                                 fontSize = 11.sp,
                                 modifier = Modifier.fillMaxWidth(),
@@ -171,10 +177,5 @@ fun FirstRunSetupDialog(
     }
 }
 
-private fun formatSpeed(bytesPerSecond: Long): String {
-    return when {
-        bytesPerSecond >= 1024 * 1024 -> "%.1f MB/s".format(bytesPerSecond / (1024.0 * 1024.0))
-        bytesPerSecond >= 1024 -> "%.0f KB/s".format(bytesPerSecond / 1024.0)
-        else -> "$bytesPerSecond B/s"
-    }
-}
+/** Speed indicator is always shown in KB/s. */
+private fun formatSpeed(bytesPerSecond: Long): String = "%.1f KB/s".format(bytesPerSecond / 1024.0)

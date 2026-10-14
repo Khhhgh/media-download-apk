@@ -3,9 +3,12 @@ package com.example.service
 import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import okhttp3.CacheControl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
@@ -31,15 +34,22 @@ data class EngineUpdateResult(
 )
 
 /**
- * Dynamic OTA update service for the Python engine tree.
+ * Over-the-air (OTA) sync of the Python engine tree.
  *
- * Guarantees:
- * - The remote version is read first; when it is equal or lower, nothing is downloaded.
- * - All files (and their SHA-256 hashes) are validated in a staging directory before activation.
- * - The new tree is activated by an atomic-ish directory swap with rollback to the previous
- *   known-good copy if activation fails.
- * - The local version is only committed after every stage succeeds.
- * - Transient network/HTTP failures keep the last valid version intact.
+ * Network rules (anti rate-limit):
+ * - Everything is served through the jsDelivr CDN ([BASE_URL]). `api.github.com` and
+ *   `raw.githubusercontent.com` are NEVER contacted.
+ * - `version.txt` (a few bytes) is always requested as `version.txt?t=<now>` with
+ *   `Cache-Control: no-cache` + FORCE_NETWORK, so a stale CDN/HTTP cache can't hide a release.
+ * - Engine files are requested as `<file>?v=<remoteVersion>` so each release has its own URL.
+ *
+ * Safety rules:
+ * - Download goes to `cacheDir/temp_engines`; nothing touches the live tree until every file
+ *   is downloaded and (when a consistent manifest exists) SHA-256 verified.
+ * - Activation is a same-directory rename swap with rollback to the previous known-good tree.
+ * - The local version is "committed" implicitly by the new tree's own `version.txt`, which is
+ *   written into staging only after all files are valid.
+ * - Any failure keeps the last working tree untouched.
  */
 class EngineUpdateManager(private val context: Context) {
 
@@ -51,18 +61,8 @@ class EngineUpdateManager(private val context: Context) {
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    /** Base URL hosting version.txt, manifest.json and the engine tree (no trailing slash). */
-    var updateBaseUrl: String
-        get() = prefs.getString(KEY_BASE_URL, DEFAULT_BASE_URL) ?: DEFAULT_BASE_URL
-        set(value) {
-            val normalized = value.trimEnd('/')
-            // All update traffic must be encrypted; reject any cleartext source.
-            if (!normalized.startsWith("https://")) {
-                Log.w(tag, "Ignoring non-HTTPS update base URL: $normalized")
-                return
-            }
-            prefs.edit().putString(KEY_BASE_URL, normalized).apply()
-        }
+    /** CDN base (no trailing slash). Fixed on purpose: no GitHub API / raw endpoints. */
+    val updateBaseUrl: String get() = BASE_URL
 
     val lastCheckTime: Long get() = prefs.getLong(KEY_LAST_CHECK, 0L)
     val lastUpdateTime: Long get() = prefs.getLong(KEY_LAST_UPDATE, 0L)
@@ -70,116 +70,121 @@ class EngineUpdateManager(private val context: Context) {
     fun recordCheck() = prefs.edit().putLong(KEY_LAST_CHECK, System.currentTimeMillis()).apply()
 
     /**
-     * Checks the remote source and installs a newer engine version if available.
+     * Checks the CDN and installs a newer engine version when `remote > local`.
      *
-     * @param force when true, installs the remote version even if it is not strictly newer
-     *              (used by the first-run setup so the very first install is authoritative).
+     * @param force install the remote tree even when it is not newer (used by first-run
+     *              provisioning so a fresh install is always taken from the network).
      */
     suspend fun checkAndUpdate(
         onProgress: (suspend (EngineUpdateProgress) -> Unit)? = null,
         force: Boolean = false
     ): EngineUpdateResult = withContext(Dispatchers.IO) {
         updateMutex.withLock {
-            // Ensure we always have a base (bundled) copy before touching the network.
-            EngineStorage.installBundledIfNeeded(context)
+            EngineStorage.recoverInterruptedSwap(context)
             val localVersion = EngineStorage.readActiveVersion(context)
 
             try {
-                onProgress?.invoke(EngineUpdateProgress("التحقق من مصدر التحديث", 2))
+                onProgress?.invoke(EngineUpdateProgress("التحقق من أحدث إصدار", 2))
                 val remoteVersion = fetchRemoteVersion()
-
                 if (remoteVersion <= 0) {
                     return@withLock EngineUpdateResult(false, false, localVersion, "رقم إصدار غير صالح من المصدر")
                 }
 
-                if (!force && remoteVersion <= localVersion) {
-                    Log.i(tag, "Engine already up to date (local=$localVersion remote=$remoteVersion)")
+                val needsInstall = force || remoteVersion > localVersion || !EngineStorage.isInstalled(context)
+                if (!needsInstall) {
+                    Log.i(tag, "Engines up to date (local=$localVersion remote=$remoteVersion)")
                     recordCheck()
                     onProgress?.invoke(EngineUpdateProgress("لا توجد تحديثات جديدة", 100))
                     return@withLock EngineUpdateResult(true, false, localVersion, null)
                 }
 
-                val manifest = fetchManifest(remoteVersion)
-                val files = manifest.optJSONObject("files")
-                    ?: return@withLock EngineUpdateResult(false, false, localVersion, "ملف manifest غير صالح")
-
-                val entries = mutableListOf<ManifestEntry>()
-                val names = files.keys()
-                var totalBytes = 0L
-                while (names.hasNext()) {
-                    val name = names.next()
-                    val obj = files.optJSONObject(name) ?: continue
-                    val size = obj.optLong("size", -1L)
-                    val sha = obj.optString("sha256", "")
-                    if (sha.isBlank() || size < 0) {
-                        return@withLock EngineUpdateResult(false, false, localVersion, "بيانات تحقق ناقصة للملف $name")
-                    }
-                    entries.add(ManifestEntry(name, sha, size))
-                    totalBytes += size
-                }
-                if (entries.isEmpty()) {
-                    return@withLock EngineUpdateResult(false, false, localVersion, "لا توجد ملفات محركات في المصدر")
-                }
-
-                // Disk space guard (require roughly 2x the payload for staging + activation).
-                val required = totalBytes * 2
-                val usable = EngineStorage.stagingDir(context).usableSpace
-                if (usable in 1L until required) {
-                    return@withLock EngineUpdateResult(false, false, localVersion, "مساحة التخزين غير كافية")
-                }
+                val entries = resolveEntries(remoteVersion)
+                val knownTotal = entries.sumOf { it.size.coerceAtLeast(0L) }
 
                 val staging = EngineStorage.stagingDir(context)
                 if (staging.exists()) staging.deleteRecursively()
                 if (!staging.mkdirs() && !staging.isDirectory) {
                     return@withLock EngineUpdateResult(false, false, localVersion, "تعذر إنشاء مجلد مؤقت")
                 }
+                val usable = staging.usableSpace
+                if (knownTotal > 0 && usable in 1L until knownTotal * 2) {
+                    cleanupStaging()
+                    return@withLock EngineUpdateResult(false, false, localVersion, "مساحة التخزين غير كافية")
+                }
 
                 var downloaded = 0L
+                var lastEmit = 0L
                 val startTime = System.currentTimeMillis()
+                val stagingRoot = staging.canonicalPath + File.separator
+
                 for ((index, entry) in entries.withIndex()) {
                     val target = File(staging, entry.name)
-                    target.parentFile?.mkdirs()
-                    downloadToFile("${updateBaseUrl}/${entry.name}", target) { delta ->
-                        downloaded += delta
+                    // Path-traversal guard: a manifest entry must never escape the staging dir.
+                    if (!target.canonicalPath.startsWith(stagingRoot)) {
+                        throw IOException("مسار ملف غير آمن: ${entry.name}")
                     }
-                    val elapsed = (System.currentTimeMillis() - startTime).coerceAtLeast(1L)
-                    val speed = (downloaded * 1000L) / elapsed
-                    val basePercent = if (totalBytes > 0) ((downloaded * 70L) / totalBytes).toInt() else 0
-                    onProgress?.invoke(
-                        EngineUpdateProgress(
-                            stage = "تنزيل المحركات (${index + 1}/${entries.size})",
-                            percent = 10 + basePercent,
-                            downloadedBytes = downloaded,
-                            totalBytes = totalBytes,
-                            bytesPerSecond = speed
-                        )
-                    )
+                    target.parentFile?.mkdirs()
+
+                    var attempt = 0
+                    while (true) {
+                        val before = downloaded
+                        downloadToFile(fileUrl(entry.name, remoteVersion, attempt), target) { delta ->
+                            downloaded += delta
+                            val now = System.currentTimeMillis()
+                            if (onProgress != null && now - lastEmit >= 120L) {
+                                lastEmit = now
+                                val elapsed = (now - startTime).coerceAtLeast(1L)
+                                val percent = if (knownTotal > 0) {
+                                    10 + ((downloaded * 70L) / knownTotal).toInt().coerceAtMost(70)
+                                } else {
+                                    10 + (index * 70) / entries.size
+                                }
+                                onProgress(
+                                    EngineUpdateProgress(
+                                        stage = "تنزيل المحركات (${index + 1}/${entries.size})",
+                                        percent = percent,
+                                        downloadedBytes = downloaded,
+                                        totalBytes = knownTotal,
+                                        bytesPerSecond = (downloaded * 1000L) / elapsed
+                                    )
+                                )
+                            }
+                        }
+                        if (!target.isFile || target.length() == 0L) {
+                            throw IOException("ملف فارغ أو ناقص: ${entry.name}")
+                        }
+                        val expected = entry.sha256
+                        if (expected == null || sha256(target).equals(expected, ignoreCase = true)) break
+                        // Likely a stale CDN edge: retry once through a fresh cache key.
+                        downloaded = before
+                        if (++attempt >= 2) throw IOException(HASH_MISMATCH + entry.name)
+                    }
                 }
 
                 onProgress?.invoke(EngineUpdateProgress("التحقق من سلامة الملفات", 82))
-                entries.forEach { entry ->
-                    val target = File(staging, entry.name)
-                    if (!target.isFile) {
-                        staging.deleteRecursively()
-                        return@withLock EngineUpdateResult(false, false, localVersion, "ملف ناقص: ${entry.name}")
-                    }
-                    val actual = sha256(target)
-                    if (!actual.equals(entry.sha256, ignoreCase = true)) {
-                        staging.deleteRecursively()
-                        return@withLock EngineUpdateResult(false, false, localVersion, "فشل التحقق من سلامة: ${entry.name}")
-                    }
+                if (!File(staging, "runner.py").isFile) {
+                    throw IOException("ملف ناقص: runner.py")
                 }
+                // The version marker is written from the freshly fetched number (never from a
+                // possibly cached copy) and only now that every file is valid.
+                File(staging, EngineStorage.ENGINE_VERSION_FILE).writeText(remoteVersion.toString())
 
                 onProgress?.invoke(EngineUpdateProgress("تفعيل الإصدار الجديد", 90))
                 activate(staging)
+
+                // Results cached from the previous engines must not mask the new ones.
+                ScaleArchitecture.mediaCache.clear()
 
                 prefs.edit()
                     .putLong(KEY_LAST_CHECK, System.currentTimeMillis())
                     .putLong(KEY_LAST_UPDATE, System.currentTimeMillis())
                     .apply()
-                Log.i(tag, "Engine updated to v$remoteVersion")
+                Log.i(tag, "Engines updated: v$localVersion -> v$remoteVersion")
                 onProgress?.invoke(EngineUpdateProgress("اكتمل التحديث", 100))
                 EngineUpdateResult(true, true, remoteVersion, null)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                cleanupStaging()
+                throw e
             } catch (e: Exception) {
                 Log.w(tag, "Engine update failed, keeping current version: ${e.message}")
                 cleanupStaging()
@@ -189,47 +194,78 @@ class EngineUpdateManager(private val context: Context) {
         }
     }
 
+    /** Reads the live version number: a ~1-byte request, cache-busted with a timestamp. */
     suspend fun fetchRemoteVersion(): Int = withContext(Dispatchers.IO) {
-        val body = httpGet("${updateBaseUrl}/${EngineStorage.ENGINE_VERSION_FILE}")
-        body.trim().toIntOrNull() ?: 0
+        val body = httpGet("$BASE_URL/${EngineStorage.ENGINE_VERSION_FILE}?t=${System.currentTimeMillis()}")
+        body.trim().lineSequence().firstOrNull()?.trim()?.toIntOrNull() ?: 0
     }
 
-    private fun fetchManifest(remoteVersion: Int): JSONObject {
-        val body = httpGet("${updateBaseUrl}/${EngineStorage.ENGINE_MANIFEST_FILE}")
-        val json = JSONObject(body)
-        val manifestVersion = json.optInt("version", remoteVersion)
-        if (manifestVersion != remoteVersion) {
-            throw IOException("manifest version ($manifestVersion) != version.txt ($remoteVersion)")
+    /**
+     * File list for a release. Prefers the manifest (gives SHA-256 verification) but only when it
+     * describes exactly this release; a missing/stale/invalid manifest must never block updates,
+     * so the built-in list is used (without hashes) instead.
+     */
+    private fun resolveEntries(remoteVersion: Int): List<ManifestEntry> {
+        val fromManifest = try {
+            fetchManifestEntries(remoteVersion)
+        } catch (e: Exception) {
+            Log.w(tag, "Manifest unavailable (${e.message}); using built-in file list")
+            null
         }
-        return json
+        return fromManifest ?: FALLBACK_FILES.map { ManifestEntry(it, null, -1L) }
     }
+
+    private fun fetchManifestEntries(remoteVersion: Int): List<ManifestEntry>? {
+        val body = httpGet("$BASE_URL/${EngineStorage.ENGINE_MANIFEST_FILE}?t=${System.currentTimeMillis()}")
+        val json = JSONObject(body)
+        val manifestVersion = json.optInt("version", -1)
+        if (manifestVersion != remoteVersion) {
+            Log.w(tag, "manifest.json is v$manifestVersion but version.txt is v$remoteVersion; ignoring manifest")
+            return null
+        }
+        val files = json.optJSONObject("files") ?: return null
+        val out = mutableListOf<ManifestEntry>()
+        val names = files.keys()
+        while (names.hasNext()) {
+            val name = names.next()
+            if (name in MANIFEST_EXCLUDED) continue
+            val obj = files.optJSONObject(name) ?: return null
+            val sha = obj.optString("sha256", "")
+            if (sha.isBlank()) return null
+            out.add(ManifestEntry(name, sha, obj.optLong("size", -1L)))
+        }
+        return out.takeIf { it.isNotEmpty() }
+    }
+
+    private fun fileUrl(name: String, remoteVersion: Int, attempt: Int): String {
+        val base = "$BASE_URL/$name?v=$remoteVersion"
+        return if (attempt == 0) base else "$base&r=${System.currentTimeMillis()}"
+    }
+
+    private fun newRequest(url: String): Request = Request.Builder()
+        .url(url)
+        .header("User-Agent", USER_AGENT)
+        .header("Cache-Control", "no-cache")
+        .header("Pragma", "no-cache")
+        .cacheControl(CacheControl.FORCE_NETWORK)
+        .build()
 
     private fun httpGet(url: String): String {
-        val request = Request.Builder()
-            .url(url)
-            .header("User-Agent", "MediaDownload-Engine/1.0")
-            .header("Cache-Control", "no-cache")
-            .build()
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                throw IOException("HTTP ${response.code}")
-            }
+        client.newCall(newRequest(url)).execute().use { response ->
+            if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
             return response.body?.string() ?: throw IOException("Empty response")
         }
     }
 
-    private fun downloadToFile(url: String, target: File, onBytes: (Long) -> Unit) {
-        val request = Request.Builder()
-            .url(url)
-            .header("User-Agent", "MediaDownload-Engine/1.0")
-            .build()
-        client.newCall(request).execute().use { response ->
+    private suspend fun downloadToFile(url: String, target: File, onBytes: suspend (Long) -> Unit) {
+        client.newCall(newRequest(url)).execute().use { response ->
             if (!response.isSuccessful) throw IOException("HTTP ${response.code} for $url")
             val body = response.body ?: throw IOException("Empty body for $url")
             body.byteStream().use { input ->
                 target.outputStream().use { output ->
                     val buffer = ByteArray(16 * 1024)
                     while (true) {
+                        currentCoroutineContext().ensureActive()
                         val read = input.read(buffer)
                         if (read <= 0) break
                         output.write(buffer, 0, read)
@@ -240,24 +276,37 @@ class EngineUpdateManager(private val context: Context) {
         }
     }
 
-    /** Swaps the staged tree in, keeping the previous version until activation succeeds. */
+    /**
+     * Atomic swap. The validated staging tree is first moved next to the live one (same parent
+     * directory, so the final rename is atomic), then: active -> backup, incoming -> active.
+     * On failure the previous tree is restored.
+     */
     private fun activate(staging: File) {
         val active = EngineStorage.activeEnginesDir(context)
+        val incoming = EngineStorage.incomingEnginesDir(context)
         val backup = EngineStorage.backupEnginesDir(context)
+
+        if (incoming.exists()) incoming.deleteRecursively()
         if (backup.exists()) backup.deleteRecursively()
+
+        if (!staging.renameTo(incoming)) {
+            // cacheDir and filesDir should share a volume; copy as a safe fallback if they don't.
+            staging.copyRecursively(incoming, overwrite = true)
+            staging.deleteRecursively()
+        }
 
         val hadActive = active.exists()
         if (hadActive && !active.renameTo(backup)) {
+            incoming.deleteRecursively()
             throw IOException("تعذر الاحتفاظ بالنسخة السابقة")
         }
-        if (!staging.renameTo(active)) {
-            // Roll back to the previous known-good copy.
+        if (!incoming.renameTo(active)) {
             if (hadActive && !backup.renameTo(active)) {
                 Log.e(tag, "CRITICAL: rollback failed, engines may be inconsistent")
             }
+            incoming.deleteRecursively()
             throw IOException("تعذر تفعيل الإصدار الجديد")
         }
-        // Activation succeeded; drop the previous copy.
         if (backup.exists()) backup.deleteRecursively()
         cleanupStaging()
     }
@@ -283,22 +332,49 @@ class EngineUpdateManager(private val context: Context) {
     }
 
     private fun friendlyError(e: Exception): String = when {
+        e.message?.startsWith(HASH_MISMATCH) == true ->
+            "فشل التحقق من سلامة ${e.message?.removePrefix(HASH_MISMATCH)} " +
+                "(نسخة قديمة في كاش CDN أو manifest.json غير محدّث)"
         e.message?.contains("HTTP 404") == true -> "المصدر غير متوفر (404)"
         e.message?.contains("HTTP 403") == true -> "الوصول مرفوض (403)"
         e.message?.contains("HTTP 429") == true -> "طلبات كثيرة (429)، حاول لاحقاً"
         e.message?.contains("HTTP 5") == true -> "خطأ في الخادم (5xx)"
-        e is IOException -> "تعذر الاتصال بالإنترنت"
+        e is IOException && e.message?.startsWith("HTTP") != true &&
+            (e is java.net.UnknownHostException || e is java.net.SocketException ||
+                e is java.net.SocketTimeoutException || e is javax.net.ssl.SSLException) ->
+            "تعذر الاتصال بالإنترنت"
         else -> e.message ?: "فشل غير معروف"
     }
 
-    private data class ManifestEntry(val name: String, val sha256: String, val size: Long)
+    private data class ManifestEntry(val name: String, val sha256: String?, val size: Long)
 
     companion object {
         private val updateMutex = Mutex()
-        private const val KEY_BASE_URL = "engine_update_base_url"
         private const val KEY_LAST_CHECK = "last_check_ms"
         private const val KEY_LAST_UPDATE = "last_update_ms"
+        private const val HASH_MISMATCH = "HASH_MISMATCH:"
 
-        const val DEFAULT_BASE_URL = "https://raw.githubusercontent.com/Khhhgh/media-download-apk/main/downapp"
+        const val USER_AGENT = "MediaDownloader-App/1.0"
+
+        /** jsDelivr CDN proxy of the repo: no GitHub API, no raw.githubusercontent.com. */
+        const val BASE_URL = "https://cdn.jsdelivr.net/gh/Khhhgh/media-download-apk@main/downapp"
+
+        /** Entries that are never downloaded from a manifest (version marker is written locally). */
+        private val MANIFEST_EXCLUDED = setOf("version.txt", "manifest.json", "server.py")
+
+        /** Used only when no consistent manifest exists for the release. */
+        private val FALLBACK_FILES = listOf(
+            "runner.py",
+            "common.py",
+            "requirements.txt",
+            "Snapchat/engine.py",
+            "Instagram/engine.py",
+            "Tiktok/engine.py",
+            "Threads/engine.py",
+            "Facebook/engine.py",
+            "Pinterest/engine.py",
+            "Reddit/engine.py",
+            "Twitter/engine.py"
+        )
     }
 }
