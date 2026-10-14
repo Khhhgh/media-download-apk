@@ -2605,6 +2605,7 @@ class MasterDownloadEngine(
     private val client: OkHttpClient = ScaleArchitecture.createHighThroughputClient(),
     private val context: Context? = null
 ) {
+    private val dynamicRunner = DynamicEngineRunner(client)
     private val tiktok = TikTokDownloader(client)
     private val pinterest = PinterestDownloader(client)
     private val twitter = TwitterDownloader(client)
@@ -2663,7 +2664,19 @@ class MasterDownloadEngine(
         val resolvedUrl = UrlResolver.resolveRedirects(cleanUrl)
         val lower = resolvedUrl.lowercase()
 
-        // 0. Snapchat (including snapchat.com/t/, spotlight, stories, add, sc-cdn.net)
+        // Tier 0: Dynamic Modular Runner (OTA Cloud execution without APK rebuild)
+        val detected = detectPlatformName(cleanUrl)
+        try {
+            val dynamicRes = dynamicRunner.tryDynamicExecution(resolvedUrl, detected, config)
+            if (dynamicRes != null) {
+                Log.d("MasterDownloadEngine", "Dynamic Modular Runner handled $detected successfully")
+                return@withContext dynamicRes
+            }
+        } catch (e: Exception) {
+            Log.d("MasterDownloadEngine", "Dynamic runner fallback: ${e.message}")
+        }
+
+        // Tier 1: Snapchat (including snapchat.com/t/, spotlight, stories, add, sc-cdn.net)
         if (lower.contains("snapchat.com") || lower.contains("snap.com") || lower.contains("sc-cdn.net")) {
             return@withContext snapchat.extract(resolvedUrl, config)
         }
