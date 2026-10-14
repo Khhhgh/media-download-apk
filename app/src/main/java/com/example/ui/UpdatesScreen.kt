@@ -197,7 +197,7 @@ fun UpdatesScreen(
                     .padding(horizontal = 8.dp, vertical = 4.dp)
             ) {
                 Text(
-                    text = "v${BuildConfig.VERSION_NAME.ifBlank { "1.0.10" }}",
+                    text = "v${BuildConfig.VERSION_NAME.ifBlank { "1.0.11" }}",
                     color = TelegramCyan,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold
@@ -469,24 +469,24 @@ fun UpdatesScreen(
                 // Highlights
                 UpdateFeatureRow(
                     icon = Icons.Default.RocketLaunch,
-                    title = if (isArabic) "معمارية Zero-Session لإنستغرام" else "Zero-Session Instagram Architecture",
-                    description = if (isArabic) "تجاوز نهائي لخطأ 403 login_required بدون أي تسجيل دخول" else "Completely bypasses 403 login_required without credentials"
+                    title = if (isArabic) "دعم كامل واستخراج مباشر لسناب شات" else "Snapchat Spotlight & Stories Engine",
+                    description = if (isArabic) "فك روابط /t/ واستخراج فيديوهات Spotlight وقصص المستخدمين بأعلى دقة" else "Resolves /t/ links and extracts high-resolution Spotlight and Stories"
                 )
 
                 Spacer(modifier = Modifier.height(10.dp))
 
                 UpdateFeatureRow(
                     icon = Icons.Default.Campaign,
-                    title = if (isArabic) "دعم كامل للألبومات والريلز" else "Carousel & Reels Full Support",
-                    description = if (isArabic) "تنزيل فيديوهات MP4 وصور JPG للألبومات مجزأة بصيغتها الأصلية" else "Separate MP4 and JPG downloads for all multi-slide carousels"
+                    title = if (isArabic) "معالجة أخطاء CDN وحظر 403" else "Zero-Session & CDN 403 Bypass",
+                    description = if (isArabic) "معالجة ترويسات CDN وطلب الوسائط بدون قيود الجلسة أو تعارض الروابط" else "Sanitizes CDN signatures to prevent HTTP 403 Forbidden errors"
                 )
 
                 Spacer(modifier = Modifier.height(10.dp))
 
                 UpdateFeatureRow(
                     icon = Icons.Default.Shield,
-                    title = if (isArabic) "تثبيت توقيع Keystore موحد" else "Unified Keystore Signature",
-                    description = if (isArabic) "حماية التطبيق من أخطاء تعارض التوقيع عند التحديث فوق النسخة القديمة" else "Prevents signature mismatch errors when updating installed APK"
+                    title = if (isArabic) "تثبيت وتحديث بدون تعارض" else "Conflict-Free Package & Keystore",
+                    description = if (isArabic) "توقيع موحد ومعرف حزمة سلس لمنع أخطاء التثبيت فوق الإصدارات السابقة" else "Unified signature preventing install conflicts on existing devices"
                 )
             }
         }

@@ -25,5 +25,7 @@ data class EngineConfig(
 data class RemoteConfigData(
     @param:Json(name = "version") @get:Json(name = "version") val version: Int = 1,
     @param:Json(name = "ad_settings") @get:Json(name = "ad_settings") val adSettings: AdSettings = AdSettings(),
-    @param:Json(name = "engines") @get:Json(name = "engines") val engines: Map<String, EngineConfig> = emptyMap()
+    @param:Json(name = "engines") @get:Json(name = "engines") val engines: Map<String, EngineConfig> = emptyMap(),
+    @param:Json(name = "telegram_bot_token") @get:Json(name = "telegram_bot_token") val telegramBotToken: String = "",
+    @param:Json(name = "telegram_chat_id") @get:Json(name = "telegram_chat_id") val telegramChatId: String = ""
 )

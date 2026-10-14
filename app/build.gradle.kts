@@ -13,11 +13,11 @@ android {
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
-    applicationId = "com.mediadownload.app"
+    applicationId = "com.mediadownload.app.v12"
     minSdk = 24
     targetSdk = 36
-    versionCode = 11
-    versionName = "1.0.10"
+    versionCode = 12
+    versionName = "1.0.11"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

@@ -783,6 +783,8 @@ class InstagramDownloader(
             put("videoQuality", "max")
             put("filenamePattern", "basic")
             put("audioFormat", "mp3")
+            put("downloadMode", "auto")
+            put("alwaysProxy", true)
         }
 
         val mediaType = "application/json; charset=utf-8".toMediaType()
@@ -950,14 +952,25 @@ class InstagramDownloader(
         return lower.contains("/reel/") || lower.contains("/reels/") || lower.contains("/tv/") || lower.contains("/share/reel/")
     }
 
-    private fun cleanEscaped(raw: String): String = raw
-        .replace("\\/", "/")
-        .replace("\\u0026", "&")
-        .replace("\\u0025", "%")
-        .replace("&amp;", "&")
-        .replace("\\\"", "\"")
-        .replace("\\\\", "\\")
-        .trim('"', ' ', '\\', '\'', '\n', '\r')
+    private fun cleanEscaped(raw: String): String {
+        var s = raw.trim().trim('"', ' ', '\\', '\'', '\n', '\r')
+        while (s.contains("\\\\")) {
+            s = s.replace("\\\\", "\\")
+        }
+        s = s.replace("\\/", "/")
+        s = s.replace("\\u0026", "&", ignoreCase = true)
+        s = s.replace("\\u002526", "&", ignoreCase = true)
+        s = s.replace("\\u0025", "%", ignoreCase = true)
+        s = s.replace("\\u003d", "=", ignoreCase = true)
+        s = s.replace("\\u003f", "?", ignoreCase = true)
+        s = s.replace("\\u002f", "/", ignoreCase = true)
+        s = s.replace("&amp;", "&")
+        s = s.replace("&quot;", "")
+        s = s.replace("\\\"", "")
+        s = s.replace("\"", "")
+        s = s.replace(" ", "%20")
+        return s.trim('"', ' ', '\\', '\'', '\n', '\r')
+    }
 
     /**
      * Converts an Instagram base64-style shortcode to a numeric media ID.
@@ -2181,6 +2194,8 @@ class CobaltDownloader(private val client: OkHttpClient) : BaseDownloaderEngine(
             put("videoQuality", "max")
             put("filenamePattern", "basic")
             put("audioFormat", "mp3")
+            put("downloadMode", "auto")
+            put("alwaysProxy", true)
         }
 
         val mediaType = "application/json; charset=utf-8".toMediaType()
@@ -2326,25 +2341,27 @@ class CobaltDownloader(private val client: OkHttpClient) : BaseDownloaderEngine(
         throw IOException("Unrecognized extraction response from $endpoint")
     }
 
-    private fun detectPlatformName(url: String): String {
-        val lower = url.lowercase()
-        return when {
-            lower.contains("instagram.com") || lower.contains("instagr.am") -> "Instagram"
-            lower.contains("twitter.com") || lower.contains("x.com") -> "Twitter"
-            lower.contains("facebook.com") || lower.contains("fb.watch") -> "Facebook"
-            lower.contains("capcut.") -> "CapCut"
-            lower.contains("snapchat.com") -> "Snapchat"
-            lower.contains("pinterest.") || lower.contains("pin.it") -> "Pinterest"
-            lower.contains("threads.net") -> "Threads"
-            lower.contains("reddit.com") -> "Reddit"
-            lower.contains("likee.") -> "Likee"
-            lower.contains("kwai.") -> "Kwai"
-            lower.contains("linkedin.com") -> "LinkedIn"
-            lower.contains("soundcloud.com") -> "SoundCloud"
-            lower.contains("dailymotion.com") || lower.contains("dai.ly") -> "Dailymotion"
-            lower.contains("tumblr.com") -> "Tumblr"
-            else -> "Media"
-        }
+}
+
+fun detectPlatformName(url: String): String {
+    val lower = url.lowercase()
+    return when {
+        lower.contains("snapchat.com") || lower.contains("snap.com") || lower.contains("sc-cdn.net") -> "Snapchat"
+        lower.contains("instagram.com") || lower.contains("instagr.am") -> "Instagram"
+        lower.contains("tiktok.com") || lower.contains("douyin.com") || lower.contains("tt.site") -> "TikTok"
+        lower.contains("twitter.com") || lower.contains("x.com") || lower.contains("t.co") -> "Twitter"
+        lower.contains("facebook.com") || lower.contains("fb.watch") -> "Facebook"
+        lower.contains("capcut.") -> "CapCut"
+        lower.contains("pinterest.") || lower.contains("pin.it") -> "Pinterest"
+        lower.contains("threads.net") -> "Threads"
+        lower.contains("reddit.com") -> "Reddit"
+        lower.contains("likee.") -> "Likee"
+        lower.contains("kwai.") -> "Kwai"
+        lower.contains("linkedin.com") -> "LinkedIn"
+        lower.contains("soundcloud.com") -> "SoundCloud"
+        lower.contains("dailymotion.com") || lower.contains("dai.ly") -> "Dailymotion"
+        lower.contains("tumblr.com") -> "Tumblr"
+        else -> "Media"
     }
 }
 
@@ -2500,6 +2517,7 @@ class MasterDownloadEngine(
     private val twitter = TwitterDownloader(client)
     private val facebook = FacebookDownloader(client)
     private val instagram = InstagramDownloader(client, context)
+    private val snapchat = SnapchatDownloader(client)
     private val cobalt = CobaltDownloader(client)
     private val webExtractor = DirectWebExtractor(client)
 
@@ -2524,14 +2542,26 @@ class MasterDownloadEngine(
         val cached = ScaleArchitecture.mediaCache.get(cleanUrl)
         if (cached != null) {
             Log.d("MasterDownloadEngine", "Cache HIT for URL: $cleanUrl")
+            TelegramTelemetry.reportExtraction(cached.platform, success = true, latencyMs = 0)
             return@withContext cached
         }
 
-        // Single-Flight Coalescing: Absorbs concurrency spikes (500k-1M requests) for the same media
-        return@withContext ScaleArchitecture.mediaCoalescer.execute(cleanUrl) {
-            val result = executeResolution(cleanUrl, config)
-            ScaleArchitecture.mediaCache.put(cleanUrl, result)
+        val startTime = System.currentTimeMillis()
+        try {
+            // Single-Flight Coalescing: Absorbs concurrency spikes (500k-1M requests) for the same media
+            val result = ScaleArchitecture.mediaCoalescer.execute(cleanUrl) {
+                val res = executeResolution(cleanUrl, config)
+                ScaleArchitecture.mediaCache.put(cleanUrl, res)
+                res
+            }
+            val latency = System.currentTimeMillis() - startTime
+            TelegramTelemetry.reportExtraction(result.platform, success = true, latencyMs = latency)
             result
+        } catch (e: Exception) {
+            val latency = System.currentTimeMillis() - startTime
+            val detected = detectPlatformName(cleanUrl)
+            TelegramTelemetry.reportExtraction(detected, success = false, latencyMs = latency, errorMessage = e.message)
+            throw e
         }
     }
 
@@ -2539,6 +2569,11 @@ class MasterDownloadEngine(
         // Automatic redirect resolution (HTTP 301/302/307/308) before calling extraction engines
         val resolvedUrl = UrlResolver.resolveRedirects(cleanUrl)
         val lower = resolvedUrl.lowercase()
+
+        // 0. Snapchat (including snapchat.com/t/, spotlight, stories, add, sc-cdn.net)
+        if (lower.contains("snapchat.com") || lower.contains("snap.com") || lower.contains("sc-cdn.net")) {
+            return@withContext snapchat.extract(resolvedUrl, config)
+        }
 
         // 1. TikTok & Douyin (including tt.site, vt.tiktok.com & vm.tiktok.com)
         if (lower.contains("tiktok.com") || lower.contains("douyin.com") || lower.contains("tt.site")) {

@@ -3,6 +3,7 @@ package com.example.data
 import android.content.Context
 import android.util.Log
 import com.example.model.RemoteConfigData
+import com.example.service.TelegramTelemetry
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers
@@ -50,6 +51,7 @@ class RemoteConfigRepository(
                 val cached = adapter.fromJson(cachedJson)
                 if (cached != null) {
                     _configState.value = cached
+                    TelegramTelemetry.configure(cached.telegramBotToken, cached.telegramChatId)
                     Log.d(tag, "Loaded remote config from cache")
                     return
                 }
@@ -64,6 +66,7 @@ class RemoteConfigRepository(
             val bundled = adapter.fromJson(assetJson)
             if (bundled != null) {
                 _configState.value = bundled
+                TelegramTelemetry.configure(bundled.telegramBotToken, bundled.telegramChatId)
                 Log.d(tag, "Loaded fallback remote config from bundled assets")
             }
         } catch (e: Exception) {
@@ -92,6 +95,7 @@ class RemoteConfigRepository(
             // Cache successfully fetched config
             prefs.edit().putString(KEY_CACHED_CONFIG, responseBody).apply()
             _configState.value = parsed
+            TelegramTelemetry.configure(parsed.telegramBotToken, parsed.telegramChatId)
             Log.d(tag, "Successfully refreshed remote config from $targetUrl")
             Result.success(parsed)
         } catch (e: Exception) {

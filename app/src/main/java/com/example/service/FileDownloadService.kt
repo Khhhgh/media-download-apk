@@ -58,13 +58,7 @@ class FileDownloadService(private val context: Context) {
         }
 
         try {
-            // Unescape HTML entities & unicode in case the URL was extracted from embedded JSON or HTML
-            val cleanUrl = downloadUrl
-                .replace("&amp;", "&")
-                .replace("\\u0026", "&")
-                .replace("\\/", "/")
-                .replace(" ", "%20")
-                .trim('"', ' ', '\\')
+            val cleanUrl = sanitizeCdnUrl(downloadUrl)
 
             val isInstagram = cleanUrl.contains("cdninstagram.com", ignoreCase = true) ||
                     cleanUrl.contains("fbcdn.net", ignoreCase = true) ||
@@ -73,43 +67,53 @@ class FileDownloadService(private val context: Context) {
             val mobileUa = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
             val desktopUa = UNIVERSAL_USER_AGENT
             val mediaUa = "stagefright/1.2 (Linux;Android 13)"
+            val okhttpUa = "okhttp/4.12.0"
 
-            // Multi-tier defensive strategies for CDN downloads without conflicting Origin headers
+            data class RequestConfig(val ua: String, val referer: String?, val sendRange: Boolean)
+
             val attempts = if (isInstagram) {
                 listOf(
-                    // Strategy 1: Mobile Chrome UA + Instagram Referer (standard social video navigation)
-                    Pair(mobileUa, "https://www.instagram.com/"),
-                    // Strategy 2: Mobile Chrome UA with NO Referer (raw stream fetching, bypasses anti-hotlinking on signed CDN)
-                    Pair(mobileUa, null),
-                    // Strategy 3: Desktop Chrome UA + Instagram Referer
-                    Pair(desktopUa, "https://www.instagram.com/"),
-                    // Strategy 4: Desktop Chrome UA with NO Referer
-                    Pair(desktopUa, null),
-                    // Strategy 5: Media player daemon UA (ExoPlayer/Stagefright style)
-                    Pair(mediaUa, null)
+                    // Strategy 1: Mobile Chrome UA, NO Range, NO Referer (Clean direct stream fetch - highest success on signed CDNs)
+                    RequestConfig(mobileUa, null, false),
+                    // Strategy 2: Mobile Chrome UA, NO Range + Instagram Referer
+                    RequestConfig(mobileUa, "https://www.instagram.com/", false),
+                    // Strategy 3: Desktop Chrome UA, NO Range, NO Referer
+                    RequestConfig(desktopUa, null, false),
+                    // Strategy 4: Stagefright / Android MediaPlayer UA, NO Range, NO Referer
+                    RequestConfig(mediaUa, null, false),
+                    // Strategy 5: OkHttp default UA, NO Range, NO Referer
+                    RequestConfig(okhttpUa, null, false),
+                    // Strategy 6: Mobile Chrome UA with Range: bytes=0- (resumption)
+                    RequestConfig(mobileUa, null, true),
+                    // Strategy 7: Mobile Chrome UA with Range + Instagram Referer
+                    RequestConfig(mobileUa, "https://www.instagram.com/", true)
                 )
             } else {
                 listOf(
-                    Pair(mobileUa, getRefererForUrl(cleanUrl)),
-                    Pair(desktopUa, getRefererForUrl(cleanUrl)),
-                    Pair(mobileUa, null)
+                    RequestConfig(mobileUa, getRefererForUrl(cleanUrl), false),
+                    RequestConfig(desktopUa, getRefererForUrl(cleanUrl), false),
+                    RequestConfig(mobileUa, null, false),
+                    RequestConfig(mobileUa, getRefererForUrl(cleanUrl), true)
                 )
             }
 
             var response: okhttp3.Response? = null
             var lastCode = 0
 
-            for ((ua, referer) in attempts) {
+            for (cfg in attempts) {
                 val reqBuilder = Request.Builder()
                     .url(cleanUrl)
-                    .header("User-Agent", ua)
+                    .header("User-Agent", cfg.ua)
                     .header("Accept", "*/*")
                     .header("Accept-Encoding", "identity")
                     .header("Connection", "keep-alive")
-                    .header("Range", "bytes=0-")
 
-                if (!referer.isNullOrBlank()) {
-                    reqBuilder.header("Referer", referer)
+                if (cfg.sendRange) {
+                    reqBuilder.header("Range", "bytes=0-")
+                }
+
+                if (!cfg.referer.isNullOrBlank()) {
+                    reqBuilder.header("Referer", cfg.referer)
                 }
 
                 try {
@@ -120,7 +124,7 @@ class FileDownloadService(private val context: Context) {
                     } else {
                         lastCode = resp.code
                         resp.close()
-                        Log.w("FileDownloadService", "Attempt with UA='$ua' Referer='$referer' yielded HTTP $lastCode, trying fallback...")
+                        Log.w("FileDownloadService", "Attempt with UA='${cfg.ua}' Referer='${cfg.referer}' Range=${cfg.sendRange} yielded HTTP $lastCode, trying fallback...")
                     }
                 } catch (netEx: Exception) {
                     Log.w("FileDownloadService", "Network attempt failed: ${netEx.message}")
@@ -251,9 +255,30 @@ class FileDownloadService(private val context: Context) {
                 )
             )
 
+            val detectedPlatform = when {
+                cleanUrl.contains("snapchat", ignoreCase = true) || cleanUrl.contains("sc-cdn", ignoreCase = true) -> "Snapchat"
+                cleanUrl.contains("instagram", ignoreCase = true) || cleanUrl.contains("cdninstagram", ignoreCase = true) || cleanUrl.contains("fbcdn", ignoreCase = true) -> "Instagram"
+                cleanUrl.contains("tiktok", ignoreCase = true) || cleanUrl.contains("douyin", ignoreCase = true) || cleanUrl.contains("musical", ignoreCase = true) -> "TikTok"
+                cleanUrl.contains("twitter", ignoreCase = true) || cleanUrl.contains("twimg", ignoreCase = true) || cleanUrl.contains("x.com", ignoreCase = true) -> "Twitter"
+                cleanUrl.contains("pinterest", ignoreCase = true) || cleanUrl.contains("pinimg", ignoreCase = true) -> "Pinterest"
+                cleanUrl.contains("facebook", ignoreCase = true) -> "Facebook"
+                else -> "Media"
+            }
+            TelegramTelemetry.reportDownload(detectedPlatform, success = true, fileSizeBytes = bytesCopied)
+
             Pair(savedFile, savedUri)
         } catch (e: Exception) {
             Log.e("FileDownloadService", "Download failed: ${e.message}", e)
+            val detectedPlatform = when {
+                downloadUrl.contains("snapchat", ignoreCase = true) || downloadUrl.contains("sc-cdn", ignoreCase = true) -> "Snapchat"
+                downloadUrl.contains("instagram", ignoreCase = true) || downloadUrl.contains("cdninstagram", ignoreCase = true) || downloadUrl.contains("fbcdn", ignoreCase = true) -> "Instagram"
+                downloadUrl.contains("tiktok", ignoreCase = true) || downloadUrl.contains("douyin", ignoreCase = true) -> "TikTok"
+                downloadUrl.contains("twitter", ignoreCase = true) || downloadUrl.contains("x.com", ignoreCase = true) -> "Twitter"
+                downloadUrl.contains("pinterest", ignoreCase = true) -> "Pinterest"
+                downloadUrl.contains("facebook", ignoreCase = true) -> "Facebook"
+                else -> "Media"
+            }
+            TelegramTelemetry.reportDownload(detectedPlatform, success = false, errorMessage = e.message)
             onProgress(
                 DownloadProgress(
                     url = downloadUrl,
@@ -402,5 +427,25 @@ class FileDownloadService(private val context: Context) {
             lower.contains("instagram") || lower.contains("cdninstagram") -> "https://www.instagram.com/"
             else -> "https://www.instagram.com/"
         }
+    }
+
+    private fun sanitizeCdnUrl(raw: String): String {
+        var url = raw.trim().trim('"', '\'', '\\', ' ', '\n', '\r')
+        while (url.contains("\\\\")) {
+            url = url.replace("\\\\", "\\")
+        }
+        url = url.replace("\\/", "/")
+        url = url.replace("\\u0026", "&", ignoreCase = true)
+        url = url.replace("\\u002526", "&", ignoreCase = true)
+        url = url.replace("\\u0025", "%", ignoreCase = true)
+        url = url.replace("\\u003d", "=", ignoreCase = true)
+        url = url.replace("\\u003f", "?", ignoreCase = true)
+        url = url.replace("\\u002f", "/", ignoreCase = true)
+        url = url.replace("&amp;", "&")
+        url = url.replace("&quot;", "")
+        url = url.replace("\\\"", "")
+        url = url.replace("\"", "")
+        url = url.replace(" ", "%20")
+        return url.trim('"', '\'', '\\', ' ', '\n', '\r')
     }
 }

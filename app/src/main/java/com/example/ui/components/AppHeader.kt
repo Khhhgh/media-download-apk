@@ -77,7 +77,7 @@ fun AppHeader(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "v${BuildConfig.VERSION_NAME.ifBlank { "1.0.10" }}",
+                        text = "v${BuildConfig.VERSION_NAME.ifBlank { "1.0.11" }}",
                         color = HeaderCyanBorder,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
