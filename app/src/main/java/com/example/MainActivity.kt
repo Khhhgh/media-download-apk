@@ -3,6 +3,7 @@ package com.example
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.VideoLibrary
@@ -54,6 +56,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.ui.MainViewModel
+import com.example.ui.UpdatesScreen
 import com.example.ui.components.AppHeader
 import com.example.ui.components.HistoryView
 import com.example.ui.components.MediaPreviewModal
@@ -208,88 +211,131 @@ fun MediaDownloadApp(viewModel: MainViewModel) {
                             selectedIconColor = Color(0xFF03101E),
                             selectedTextColor = NeonCyan,
                             indicatorColor = NeonCyan,
-                            unselectedIconColor = CyberTextMuted,
-                            unselectedTextColor = CyberTextMuted
+                            unselectedIconColor = Color(0xFF8A99AD),
+                            unselectedTextColor = Color(0xFF8A99AD)
                         ),
                         modifier = Modifier.testTag("tab_history")
+                    )
+
+                    // Tab 3: Updates
+                    NavigationBarItem(
+                        selected = selectedTab == 2,
+                        onClick = { viewModel.setTab(2) },
+                        icon = {
+                            Icon(
+                                imageVector = Icons.Default.Campaign,
+                                contentDescription = "Updates"
+                            )
+                        },
+                        label = {
+                            Text(
+                                text = if (isArabic) "تحديثات" else "Updates",
+                                fontSize = 11.sp
+                            )
+                        },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = Color(0xFF03101E),
+                            selectedTextColor = NeonCyan,
+                            indicatorColor = NeonCyan,
+                            unselectedIconColor = Color(0xFF8A99AD),
+                            unselectedTextColor = Color(0xFF8A99AD)
+                        ),
+                        modifier = Modifier.testTag("tab_updates")
                     )
                 }
             }
         ) { paddingValues ->
+            if (selectedTab != 0) {
+                BackHandler {
+                    viewModel.setTab(0)
+                }
+            }
+
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(CyberBackground)
                     .padding(paddingValues)
             ) {
-                if (selectedTab == 0) {
-                    // Downloader Main Screen
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .verticalScroll(rememberScrollState())
-                    ) {
-                        AppHeader(
+                when (selectedTab) {
+                    0 -> {
+                        // Downloader Main Screen
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .verticalScroll(rememberScrollState())
+                        ) {
+                            AppHeader(
+                                isArabic = isArabic,
+                                adCounter = viewModel.adCounter,
+                                onToggleLanguage = { viewModel.toggleLanguage() },
+                                onOpenSettings = { showConfigDialog = true },
+                                modifier = Modifier.statusBarsPadding()
+                            )
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            PlatformChips(
+                                isArabic = isArabic,
+                                onPlatformClick = { platform ->
+                                    viewModel.onUrlChange("https://${platform.samplePattern}")
+                                }
+                            )
+
+                            Spacer(modifier = Modifier.height(16.dp))
+
+                            UrlInputCard(
+                                url = urlInput,
+                                isArabic = isArabic,
+                                isLoading = isExtracting,
+                                clipboardDetectedUrl = clipboardDetectedUrl,
+                                onUrlChange = { viewModel.onUrlChange(it) },
+                                onPasteClick = { viewModel.pasteAndDownload() },
+                                onClearClick = { viewModel.onUrlChange("") },
+                                onSubmit = { viewModel.startExtraction() },
+                                onDismissClipboard = { /* auto-managed */ }
+                            )
+
+                            // Extracted Media Preview Modal / Card
+                            if (extractedMedia != null) {
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Box(modifier = Modifier.padding(horizontal = 16.dp)) {
+                                    MediaPreviewModal(
+                                        media = extractedMedia!!,
+                                        isArabic = isArabic,
+                                        progress = downloadProgress,
+                                        onDownloadQuality = { quality ->
+                                            viewModel.startDownload(quality)
+                                        },
+                                        onCancelDownload = { viewModel.cancelDownload() },
+                                        onDismiss = { viewModel.dismissExtractedModal() }
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(28.dp))
+                        }
+                    }
+                    1 -> {
+                        // History Screen
+                        HistoryView(
+                            downloads = downloadsHistory,
                             isArabic = isArabic,
-                            adCounter = viewModel.adCounter,
-                            onToggleLanguage = { viewModel.toggleLanguage() },
-                            onOpenSettings = { showConfigDialog = true },
+                            onPlayItem = { viewModel.playItem(it) },
+                            onShareItem = { viewModel.shareItem(it) },
+                            onDeleteItem = { viewModel.deleteHistoryItem(it) },
+                            onClearAll = { viewModel.clearAllHistory() },
                             modifier = Modifier.statusBarsPadding()
                         )
-
-                        Spacer(modifier = Modifier.height(14.dp))
-
-                        PlatformChips(
-                            isArabic = isArabic,
-                            onPlatformClick = { platform ->
-                                viewModel.onUrlChange("https://${platform.samplePattern}")
-                            }
-                        )
-
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        UrlInputCard(
-                            url = urlInput,
-                            isArabic = isArabic,
-                            isLoading = isExtracting,
-                            clipboardDetectedUrl = clipboardDetectedUrl,
-                            onUrlChange = { viewModel.onUrlChange(it) },
-                            onPasteClick = { viewModel.pasteAndDownload() },
-                            onClearClick = { viewModel.onUrlChange("") },
-                            onSubmit = { viewModel.startExtraction() },
-                            onDismissClipboard = { /* auto-managed */ }
-                        )
-
-                        // Extracted Media Preview Modal / Card
-                        if (extractedMedia != null) {
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Box(modifier = Modifier.padding(horizontal = 16.dp)) {
-                                MediaPreviewModal(
-                                    media = extractedMedia!!,
-                                    isArabic = isArabic,
-                                    progress = downloadProgress,
-                                    onDownloadQuality = { quality ->
-                                        viewModel.startDownload(quality)
-                                    },
-                                    onCancelDownload = { viewModel.cancelDownload() },
-                                    onDismiss = { viewModel.dismissExtractedModal() }
-                                )
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(28.dp))
                     }
-                } else {
-                    // History Screen
-                    HistoryView(
-                        downloads = downloadsHistory,
-                        isArabic = isArabic,
-                        onPlayItem = { viewModel.playItem(it) },
-                        onShareItem = { viewModel.shareItem(it) },
-                        onDeleteItem = { viewModel.deleteHistoryItem(it) },
-                        onClearAll = { viewModel.clearAllHistory() },
-                        modifier = Modifier.statusBarsPadding()
-                    )
+                    else -> {
+                        // Updates Screen
+                        UpdatesScreen(
+                            isArabic = isArabic,
+                            onNavigateBack = { viewModel.setTab(0) },
+                            modifier = Modifier.statusBarsPadding()
+                        )
+                    }
                 }
             }
 

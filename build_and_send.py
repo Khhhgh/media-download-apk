@@ -52,7 +52,7 @@ def send_apk_direct(apk_path: str, file_size_mb: float):
         "🚀 <b>media download - تحميل الميديا</b>\n"
         f"📦 <b>الملف / APK:</b> <code>{filename}</code>\n"
         f"📊 <b>الحجم / Size:</b> {file_size_mb:.2f} MB\n"
-        "🏷️ <b>الإصدار / Version:</b> 1.0.8 (build 9)\n"
+        "🏷️ <b>الإصدار / Version:</b> 1.0.9 (build 10)\n"
         "⚡ <b>التحديثات / Updates:</b>\n"
         " • معمارية Zero-Session خارقة لإنستغرام: تجاوز نهائي لخطأ 403 login_required بدون أي تسجيل دخول\n"
         " • استخراج فيديوهات الريلز بدقة أصلية MP4 ومنع تام لتحميل صور الغلاف كبديل\n"

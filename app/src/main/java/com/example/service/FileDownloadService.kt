@@ -58,15 +58,59 @@ class FileDownloadService(private val context: Context) {
         }
 
         try {
-            val request = Request.Builder()
-                .url(downloadUrl)
-                .header("User-Agent", UNIVERSAL_USER_AGENT)
-                .header("Accept", "*/*")
-                .header("Accept-Encoding", "identity")
-                .header("Connection", "keep-alive")
-                .build()
+            val isInstagram = downloadUrl.contains("cdninstagram.com", ignoreCase = true) ||
+                    downloadUrl.contains("fbcdn.net", ignoreCase = true) ||
+                    downloadUrl.contains("instagram.com", ignoreCase = true)
 
-            val response = client.newCall(request).execute()
+            val mobileUserAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+
+            fun buildDownloadRequest(ua: String, referer: String?): Request {
+                val bld = Request.Builder()
+                    .url(downloadUrl)
+                    .header("User-Agent", ua)
+                    .header("Accept", "*/*")
+                    .header("Accept-Encoding", "identity")
+                    .header("Connection", "keep-alive")
+                if (!referer.isNullOrBlank()) {
+                    bld.header("Referer", referer)
+                }
+                if (isInstagram) {
+                    bld.header("Origin", "https://www.instagram.com")
+                    bld.header("Sec-Fetch-Dest", "video")
+                    bld.header("Sec-Fetch-Mode", "no-cors")
+                    bld.header("Sec-Fetch-Site", "cross-site")
+                }
+                return bld.build()
+            }
+
+            // Primary attempt: Mobile Android User-Agent + Instagram Referer (Required by Facebook CDN)
+            var request = buildDownloadRequest(
+                ua = mobileUserAgent,
+                referer = if (isInstagram) "https://www.instagram.com/" else getRefererForUrl(downloadUrl)
+            )
+
+            var response = client.newCall(request).execute()
+
+            // If 403 Forbidden is encountered, retry with fallback configurations
+            if (response.code == 403) {
+                response.close()
+                Log.w("FileDownloadService", "Received HTTP 403 on primary download, retrying with fallback headers...")
+                request = buildDownloadRequest(
+                    ua = UNIVERSAL_USER_AGENT,
+                    referer = "https://www.instagram.com/"
+                )
+                response = client.newCall(request).execute()
+
+                if (response.code == 403) {
+                    response.close()
+                    request = buildDownloadRequest(
+                        ua = mobileUserAgent,
+                        referer = null
+                    )
+                    response = client.newCall(request).execute()
+                }
+            }
+
             if (!response.isSuccessful) {
                 throw IOException("Download failed with HTTP ${response.code}")
             }
@@ -329,6 +373,18 @@ class FileDownloadService(private val context: Context) {
             bytesPerSec >= 1024 * 1024 -> String.format(Locale.US, "%.1f MB/s", bytesPerSec / (1024 * 1024))
             bytesPerSec >= 1024 -> String.format(Locale.US, "%.0f KB/s", bytesPerSec / 1024)
             else -> String.format(Locale.US, "%.0f B/s", bytesPerSec)
+        }
+    }
+
+    private fun getRefererForUrl(url: String): String {
+        val lower = url.lowercase()
+        return when {
+            lower.contains("tiktok") -> "https://www.tiktok.com/"
+            lower.contains("twitter") || lower.contains("x.com") || lower.contains("twimg") -> "https://twitter.com/"
+            lower.contains("pinterest") -> "https://www.pinterest.com/"
+            lower.contains("facebook") || lower.contains("fbcdn") -> "https://www.facebook.com/"
+            lower.contains("instagram") || lower.contains("cdninstagram") -> "https://www.instagram.com/"
+            else -> "https://www.instagram.com/"
         }
     }
 }
