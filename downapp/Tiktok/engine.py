@@ -4,5 +4,19 @@
 import json
 
 def extract(url: str, config=None):
-    # رسالة فحص واضحة للتأكد من وصول التحديث الهوائي
-    raise ValueError("TEST_SUCCESS: تم تعطيل تيك توك بنجاح وتحديث المحرك هوائياً بدون APK ✅")
+    return {
+        "title": "🔥🔥 المحركات تعمل بنجاح من بايثون 🔥🔥",
+        "videoUrl": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
+        "thumbnailUrl": "https://via.placeholder.com/300",
+        "platform": "TikTok",
+        "qualityOptions": [
+            {
+                "label": "فيديو تجريبي للاختبار",
+                "url": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
+                "format": "mp4",
+                "isHd": True
+            }
+        ],
+        "carouselItems": [],
+        "photoUrls": []
+    }
