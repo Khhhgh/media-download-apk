@@ -33,7 +33,7 @@ object TelegramReporter {
         .build()
 
     fun sendSuccess(platformName: String) {
-        val version = BuildConfig.VERSION_NAME.ifBlank { "1.0.12" }
+        val version = BuildConfig.VERSION_NAME.ifBlank { "1.0.13" }
         val message = """
             ✅ [تحميل ناجح]
             📱 المنصة: $platformName
@@ -44,7 +44,7 @@ object TelegramReporter {
     }
 
     fun sendFailure(platformName: String, error: String) {
-        val version = BuildConfig.VERSION_NAME.ifBlank { "1.0.12" }
+        val version = BuildConfig.VERSION_NAME.ifBlank { "1.0.13" }
         val cleanError = error.take(150).replace("\n", " ")
         val message = """
             ⚠️ [فشل استخراج / تنزيل]

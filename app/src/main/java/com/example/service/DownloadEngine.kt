@@ -829,7 +829,7 @@ class InstagramDownloader(
                 val itemUrl = item.optString("url", "")
                 if (itemUrl.isBlank()) continue
                 val itemType = item.optString("type", "").lowercase()
-                val isVideo = itemType == "video" || itemUrl.contains(".mp4") || itemUrl.contains("/v/")
+                val isVideo = itemType == "video" || itemUrl.contains(".mp4") || itemUrl.contains("/v/") || (isReel && picker.length() == 1)
                 val format = if (isVideo) "mp4" else "jpg"
 
                 if (isVideo) {
@@ -838,69 +838,53 @@ class InstagramDownloader(
                     imageUrls.add(itemUrl)
                 }
 
+                val typeLabel = if (isVideo) "فيديو MP4" else "صورة JPG"
                 carouselList.add(
                     CarouselItem(
                         url = itemUrl,
                         format = format,
-                        label = "Slide ${i + 1} (${if (isVideo) "Video" else "Photo"})",
+                        label = "سلايد ${i + 1} ($typeLabel)",
                         isHd = true
                     )
                 )
             }
 
             if (carouselList.isNotEmpty()) {
-                // Priority: Pull the FIRST available video in MP4 format!
-                val primaryVideo = videoUrls.firstOrNull()
-                val primaryUrl = primaryVideo ?: imageUrls.firstOrNull() ?: carouselList.first().url
-
-                val qualities = mutableListOf<QualityOption>()
-
-                // If there is an MP4 video, prioritize it at the top
-                if (primaryVideo != null) {
-                    qualities.add(
-                        QualityOption(
-                            label = "فيديو عالي الدقة (MP4)",
-                            url = primaryVideo,
-                            format = "mp4",
-                            isHd = true
-                        )
-                    )
-                }
-
-                if (carouselList.size > 1) {
-                    qualities.add(
-                        QualityOption(
-                            label = "تحميل جميع الوسائط (${carouselList.size})",
-                            url = carouselList.first().url,
-                            format = "carousel",
-                            isHd = true
-                        )
-                    )
-                }
-
-                if (imageUrls.isNotEmpty()) {
-                    qualities.add(
-                        QualityOption(
-                            label = "تحميل جميع الصور (${imageUrls.size} JPG)",
-                            url = imageUrls.first(),
-                            format = "jpg",
-                            isHd = true
-                        )
+                // If it's a Reel and we have at least 1 video, treat strictly as a Reel (ignore any extra thumbnail items)
+                if (isReel && videoUrls.isNotEmpty()) {
+                    val primaryVideo = videoUrls.first()
+                    val thumb = picker.optJSONObject(0)?.optString("thumb", "")?.ifBlank { null }
+                        ?: imageUrls.firstOrNull()
+                    return MediaResult(
+                        title = "Instagram Reel",
+                        videoUrl = primaryVideo,
+                        thumbnailUrl = thumb,
+                        platform = "Instagram",
+                        sourceUrl = sourceUrl,
+                        qualityOptions = listOf(
+                            QualityOption(
+                                label = "تحميل ريلز فيديو عالي الدقة (MP4)",
+                                url = primaryVideo,
+                                format = "mp4",
+                                isHd = true
+                            )
+                        ),
+                        photoUrls = emptyList(), // CRITICAL: Never set photoUrls for Reels
+                        carouselItems = listOf(CarouselItem(url = primaryVideo, format = "mp4", label = "Instagram Reel (MP4)", isHd = true))
                     )
                 }
 
                 val thumb = picker.optJSONObject(0)?.optString("thumb", "")?.ifBlank { null }
                     ?: imageUrls.firstOrNull() ?: videoUrls.firstOrNull()
 
-                return MediaResult(
+                return buildInstagramResult(
                     title = if (isReel) "Instagram Reel" else "Instagram Media",
-                    videoUrl = primaryUrl,
-                    thumbnailUrl = thumb,
-                    platform = "Instagram",
+                    imageUrls = imageUrls,
+                    videoUrls = videoUrls,
+                    items = carouselList,
                     sourceUrl = sourceUrl,
-                    qualityOptions = qualities,
-                    photoUrls = imageUrls,
-                    carouselItems = carouselList
+                    author = "",
+                    thumbnail = thumb
                 )
             }
         }
@@ -916,7 +900,7 @@ class InstagramDownloader(
 
                 val qualities = listOf(
                     QualityOption(
-                        label = if (format == "mp4") "فيديو عالي الدقة (MP4)" else "صورة عالية الجودة (JPG)",
+                        label = if (format == "mp4") "تحميل ريلز فيديو عالي الدقة (MP4)" else "تحميل صورة عالية الجودة (JPG)",
                         url = videoUrl,
                         format = format,
                         isHd = true
@@ -931,7 +915,7 @@ class InstagramDownloader(
                     sourceUrl = sourceUrl,
                     qualityOptions = qualities,
                     photoUrls = if (isImage) listOf(videoUrl) else emptyList(),
-                    carouselItems = listOf(CarouselItem(url = videoUrl, format = format, label = "Slide 1", isHd = true))
+                    carouselItems = listOf(CarouselItem(url = videoUrl, format = format, label = if (format == "mp4") "Video (MP4)" else "Photo (JPG)", isHd = true))
                 )
             }
         }
@@ -1133,18 +1117,22 @@ class InstagramDownloader(
         // 5. Video found -> STRICTLY save as MP4 (never fallback to JPG cover)
         if (videoUrls.isNotEmpty()) {
             val orderedItems = mutableListOf<CarouselItem>()
+            val isMulti = videoUrls.size > 1 || (videoUrls.isNotEmpty() && imageUrls.isNotEmpty() && !isReel)
             videoUrls.forEachIndexed { idx, v ->
-                orderedItems.add(CarouselItem(v, "mp4", "Video ${idx + 1}", true))
+                val label = if (videoUrls.size > 1) "سلايد ${idx + 1} (فيديو MP4)" else "ريلز فيديو (MP4)"
+                orderedItems.add(CarouselItem(v, "mp4", label, true))
             }
             // Multi-item Carousel with both videos and photos
-            if (imageUrls.isNotEmpty() && (videoUrls.size > 1 || imageUrls.size > 1)) {
+            val actualPhotoSlides = mutableListOf<String>()
+            if (isMulti && imageUrls.isNotEmpty()) {
                 imageUrls.forEachIndexed { idx, p ->
-                    orderedItems.add(CarouselItem(p, "jpg", "Photo ${idx + 1}", true))
+                    actualPhotoSlides.add(p)
+                    orderedItems.add(CarouselItem(p, "jpg", "سلايد ${orderedItems.size} (صورة JPG)", true))
                 }
             }
             return buildInstagramResult(
                 resolvedTitle,
-                imageUrls.toList(),
+                actualPhotoSlides,
                 videoUrls.toList(),
                 orderedItems,
                 pageUrl,
@@ -1416,6 +1404,8 @@ class InstagramDownloader(
             val items = mutableListOf<CarouselItem>()
 
             val edges = node.optJSONObject("edge_sidecar_to_children")?.optJSONArray("edges")
+            val carouselMedia = node.optJSONArray("carousel_media")
+
             if (edges != null && edges.length() > 0) {
                 for (i in 0 until edges.length()) {
                     val child = edges.optJSONObject(i)?.optJSONObject("node") ?: continue
@@ -1427,20 +1417,43 @@ class InstagramDownloader(
                         val video = cleanEscaped(rawVideo)
                         if (video.isNotBlank()) {
                             videoUrls.add(video)
-                            items.add(CarouselItem(url = video, format = "mp4", label = "Slide ${i + 1} (Video)", isHd = true))
+                            items.add(CarouselItem(url = video, format = "mp4", label = "سلايد ${i + 1} (فيديو MP4)", isHd = true))
                         }
                     } else {
                         val rawImg = child.optString("display_url", "").ifBlank { child.optString("image_url", "") }
                         val img = cleanEscaped(rawImg)
                         if (img.isNotBlank()) {
                             imageUrls.add(img)
-                            items.add(CarouselItem(url = img, format = "jpg", label = "Slide ${i + 1} (Image)", isHd = true))
+                            items.add(CarouselItem(url = img, format = "jpg", label = "سلايد ${i + 1} (صورة JPG)", isHd = true))
+                        }
+                    }
+                }
+            } else if (carouselMedia != null && carouselMedia.length() > 0) {
+                for (i in 0 until carouselMedia.length()) {
+                    val child = carouselMedia.optJSONObject(i) ?: continue
+                    val isVideo = child.optInt("media_type") == 2 || child.optBoolean("is_video", false) || child.has("video_versions")
+                    if (isVideo) {
+                        val rawVideo = child.optJSONArray("video_versions")?.optJSONObject(0)?.optString("url", "")
+                            ?: child.optString("video_url", "")
+                        val video = cleanEscaped(rawVideo)
+                        if (video.isNotBlank()) {
+                            videoUrls.add(video)
+                            items.add(CarouselItem(url = video, format = "mp4", label = "سلايد ${i + 1} (فيديو MP4)", isHd = true))
+                        }
+                    } else {
+                        val candidates = child.optJSONObject("image_versions2")?.optJSONArray("candidates")
+                        val rawImg = candidates?.optJSONObject(0)?.optString("url", "")
+                            ?: child.optString("display_url", "")
+                        val img = cleanEscaped(rawImg)
+                        if (img.isNotBlank()) {
+                            imageUrls.add(img)
+                            items.add(CarouselItem(url = img, format = "jpg", label = "سلايد ${i + 1} (صورة JPG)", isHd = true))
                         }
                     }
                 }
             } else {
-                val isVideo = node.optBoolean("is_video", false) || node.optBoolean("video", false)
-                val rawVideo = if (isVideo || node.has("video_url")) {
+                val isVideo = node.optBoolean("is_video", false) || node.optBoolean("video", false) || node.optInt("media_type") == 2
+                val rawVideo = if (isVideo || node.has("video_url") || node.has("video_versions")) {
                     node.optString("video_url", "").ifBlank {
                         node.optJSONArray("video_versions")?.optJSONObject(0)?.optString("url", "") ?: ""
                     }
@@ -1448,13 +1461,16 @@ class InstagramDownloader(
                 val video = cleanEscaped(rawVideo)
                 if (video.isNotBlank()) {
                     videoUrls.add(video)
-                    items.add(CarouselItem(url = video, format = "mp4", label = "Video", isHd = true))
+                    items.add(CarouselItem(url = video, format = "mp4", label = "ريلز فيديو (MP4)", isHd = true))
                 } else {
-                    val rawImg = node.optString("display_url", "").ifBlank { node.optString("image_url", "") }
+                    val candidates = node.optJSONObject("image_versions2")?.optJSONArray("candidates")
+                    val rawImg = node.optString("display_url", "").ifBlank {
+                        candidates?.optJSONObject(0)?.optString("url", "") ?: ""
+                    }.ifBlank { node.optString("image_url", "") }
                     val img = cleanEscaped(rawImg)
                     if (img.isNotBlank()) {
                         imageUrls.add(img)
-                        items.add(CarouselItem(url = img, format = "jpg", label = "Image", isHd = true))
+                        items.add(CarouselItem(url = img, format = "jpg", label = "صورة (JPG)", isHd = true))
                     }
                 }
             }
@@ -1482,43 +1498,120 @@ class InstagramDownloader(
         author: String,
         thumbnail: String?
     ): MediaResult {
-        val primary = videoUrls.firstOrNull() ?: imageUrls.firstOrNull() ?: items.first().url
+        val videoItems = items.filter { it.format == "mp4" }
+        val photoItems = items.filter { it.format in listOf("jpg", "jpeg", "png", "webp") }
         val qualities = mutableListOf<QualityOption>()
 
+        // Multi-slide Carousel / Album
         if (items.size > 1) {
+            val vCount = videoItems.size
+            val pCount = photoItems.size
+            val summary = when {
+                vCount > 0 && pCount > 0 -> "$vCount فيديو • $pCount صورة"
+                vCount > 0 -> "$vCount فيديو MP4"
+                else -> "$pCount صورة JPG"
+            }
             qualities.add(
                 QualityOption(
-                    label = "Download All Slides (${items.size})",
+                    label = "تحميل جميع عناصر المنشور (${items.size}) [$summary]",
                     url = items.first().url,
                     format = "carousel",
                     isHd = true
                 )
             )
-        }
 
-        if (videoUrls.isNotEmpty()) {
-            qualities.add(QualityOption("Highest Quality Video (MP4)", videoUrls.first(), format = "mp4", isHd = true))
-        }
-        if (imageUrls.isNotEmpty()) {
+            if (vCount > 0) {
+                qualities.add(
+                    QualityOption(
+                        label = if (vCount == 1) "تحميل الفيديو (MP4)" else "تحميل جميع الفيديوهات ($vCount فيديو MP4)",
+                        url = videoItems.first().url,
+                        format = "mp4",
+                        isHd = true
+                    )
+                )
+            }
+
+            if (pCount > 0) {
+                qualities.add(
+                    QualityOption(
+                        label = if (pCount == 1) "تحميل الصورة (JPG)" else "تحميل جميع الصور ($pCount صورة JPG)",
+                        url = photoItems.first().url,
+                        format = "album",
+                        isHd = true
+                    )
+                )
+            }
+
+            // Individual slide options
+            items.forEachIndexed { idx, item ->
+                val typeName = if (item.format == "mp4") "فيديو MP4" else "صورة JPG"
+                qualities.add(
+                    QualityOption(
+                        label = "سلايد ${idx + 1} ($typeName)",
+                        url = item.url,
+                        format = item.format,
+                        isHd = true
+                    )
+                )
+            }
+        } else if (videoItems.isNotEmpty() || videoUrls.isNotEmpty()) {
+            // Single Video / Reel
+            val vidUrl = videoItems.firstOrNull()?.url ?: videoUrls.first()
             qualities.add(
                 QualityOption(
-                    "Download All Photos (${imageUrls.size} JPG)",
-                    imageUrls.first(),
+                    label = "تحميل ريلز فيديو عالي الدقة (MP4)",
+                    url = vidUrl,
+                    format = "mp4",
+                    isHd = true
+                )
+            )
+        } else if (photoItems.isNotEmpty() || imageUrls.isNotEmpty()) {
+            // Single Photo
+            val imgUrl = photoItems.firstOrNull()?.url ?: imageUrls.first()
+            qualities.add(
+                QualityOption(
+                    label = "تحميل صورة عالية الجودة (JPG)",
+                    url = imgUrl,
                     format = "jpg",
                     isHd = true
                 )
             )
         }
+
+        val primary = videoItems.firstOrNull()?.url
+            ?: videoUrls.firstOrNull()
+            ?: photoItems.firstOrNull()?.url
+            ?: imageUrls.firstOrNull()
+            ?: items.firstOrNull()?.url
+            ?: ""
+
+        // For single video/reel, photoUrls MUST BE EMPTY to prevent downloading cover photo!
+        val resolvedPhotoUrls = if (items.size > 1) {
+            photoItems.map { it.url }
+        } else if (videoItems.isEmpty() && videoUrls.isEmpty()) {
+            photoItems.map { it.url }.ifEmpty { imageUrls }
+        } else {
+            emptyList()
+        }
+
+        val resolvedItems = if (items.isNotEmpty()) {
+            items
+        } else if (videoUrls.isNotEmpty()) {
+            listOf(CarouselItem(videoUrls.first(), "mp4", "ريلز فيديو (MP4)", true))
+        } else if (imageUrls.isNotEmpty()) {
+            listOf(CarouselItem(imageUrls.first(), "jpg", "صورة (JPG)", true))
+        } else emptyList()
+
         return MediaResult(
             title = title,
             videoUrl = primary,
-            thumbnailUrl = thumbnail,
+            thumbnailUrl = thumbnail ?: photoItems.firstOrNull()?.url ?: imageUrls.firstOrNull(),
             platform = "Instagram",
             author = author.ifBlank { null },
             sourceUrl = sourceUrl,
             qualityOptions = qualities,
-            photoUrls = imageUrls,
-            carouselItems = items
+            photoUrls = resolvedPhotoUrls,
+            carouselItems = resolvedItems
         )
     }
 }

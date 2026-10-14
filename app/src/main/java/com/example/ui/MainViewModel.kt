@@ -244,7 +244,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun startDownload(quality: QualityOption? = null) {
         val media = _extractedMedia.value ?: return
         val targetUrl = quality?.url ?: media.videoUrl
-        val format = quality?.format ?: "mp4"
+        val format = quality?.format ?: (
+            if (media.carouselItems.any { it.format == "mp4" } || media.videoUrl.contains(".mp4") || !media.videoUrl.contains(".jpg")) "mp4"
+            else "jpg"
+        )
 
         // Monetization & Ad Frequency logic
         // If 4th download: trigger centered toast followed by fullscreen ad
@@ -294,8 +297,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     downloadDao.insertDownload(item)
 
                     emitToast(
-                        if (_isArabic.value) "تم حفظ جميع عناصر المنشور (${media.carouselItems.size}) في المعرض بنجاح!"
-                        else "Saved all ${media.carouselItems.size} slides to Gallery!"
+                        if (_isArabic.value) "تم حفظ جميع عناصر المنشور (${media.carouselItems.size}) في المعرض بنجاح! ($videoCount فيديو و $imageCount صورة)"
+                        else "Saved all ${media.carouselItems.size} slides to Gallery! ($videoCount video & $imageCount photo)"
                     )
                 } catch (e: Exception) {
                     Log.e("MainViewModel", "Carousel download error", e)
@@ -306,8 +309,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
 
-            // Check if this is a TikTok Photo Album download (batch download all photos)
-            if (media.photoUrls.isNotEmpty() && format != "mp3") {
+            // Pure Photo Album batch download (multiple photos, e.g. TikTok photos, when explicitly requesting album batch)
+            val isAlbumBatch = format == "album" || (format == "jpg" && quality?.label?.contains("جميع") == true && media.photoUrls.size > 1)
+            if (isAlbumBatch && media.photoUrls.isNotEmpty()) {
                 _downloadProgress.value = DownloadProgress(
                     url = targetUrl,
                     fileName = media.title,
@@ -351,6 +355,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
 
+            // Normal single download (Video MP4, Audio MP3, or Single Photo JPG)
             _downloadProgress.value = DownloadProgress(
                 url = targetUrl,
                 fileName = media.title,
@@ -368,6 +373,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                 // Save to Room history
                 val filePath = file?.absolutePath ?: (uri?.toString() ?: "")
+                val mimeType = when (format) {
+                    "mp3" -> "audio/mpeg"
+                    "jpg", "jpeg", "png", "webp" -> "image/jpeg"
+                    else -> "video/mp4"
+                }
+
                 val item = DownloadItem(
                     title = media.title,
                     platform = media.platform,
@@ -376,14 +387,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     mediaUri = uri?.toString() ?: filePath,
                     fileSize = _downloadProgress.value.bytesDownloaded,
                     formattedSize = formatBytes(_downloadProgress.value.bytesDownloaded),
-                    mimeType = if (format == "mp3") "audio/mpeg" else "video/mp4",
+                    mimeType = mimeType,
                     thumbnailUri = media.thumbnailUrl
                 )
                 downloadDao.insertDownload(item)
 
-                emitToast(
-                    if (_isArabic.value) "تم الحفظ في المعرض بنجاح!" else "Saved to Gallery successfully!"
-                )
+                val successMsg = if (_isArabic.value) {
+                    when {
+                        format == "mp3" -> "تم حفظ الصوت في المعرض بنجاح!"
+                        format in listOf("jpg", "jpeg", "png", "webp") -> "تم حفظ الصورة في المعرض بنجاح!"
+                        else -> "تم حفظ الفيديو في المعرض بنجاح!"
+                    }
+                } else {
+                    when {
+                        format == "mp3" -> "Audio saved to Gallery successfully!"
+                        format in listOf("jpg", "jpeg", "png", "webp") -> "Photo saved to Gallery successfully!"
+                        else -> "Video saved to Gallery successfully!"
+                    }
+                }
+                emitToast(successMsg)
             } catch (e: Exception) {
                 Log.e("MainViewModel", "Download error", e)
                 emitToast(

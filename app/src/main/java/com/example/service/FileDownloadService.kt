@@ -360,8 +360,10 @@ class FileDownloadService(private val context: Context) {
 
         items.forEachIndexed { index, item ->
             val number = index + 1
-            val format = item.format.ifBlank { "jpg" }.lowercase()
-            val slideTitle = "${sanitizedBase}_slide_$number"
+            val isVid = item.format.equals("mp4", ignoreCase = true) || item.url.contains(".mp4")
+            val format = if (isVid) "mp4" else "jpg"
+            val typePrefix = if (isVid) "video" else "photo"
+            val slideTitle = "${sanitizedBase}_${typePrefix}_$number"
             val percent = ((number.toFloat() / total) * 100).toInt()
 
             onProgress(

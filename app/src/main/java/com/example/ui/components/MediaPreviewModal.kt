@@ -253,11 +253,14 @@ fun MediaPreviewModal(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 if (media.carouselItems.size > 1) {
-                    // Multi-slide post (e.g. Instagram Carousel): download each slide separately
+                    val videoCount = media.carouselItems.count { it.format == "mp4" }
+                    val photoCount = media.carouselItems.count { it.format in listOf("jpg", "jpeg", "png", "webp") }
+
+                    // 1. Primary button: Download ALL slides (videos as MP4, photos as JPG)
                     QualityButton(
                         option = QualityOption(
-                            label = if (isArabic) "تحميل كل العناصر (${media.carouselItems.size} سلايد)"
-                            else "Download All Slides (${media.carouselItems.size})",
+                            label = if (isArabic) "تحميل جميع عناصر المنشور (${media.carouselItems.size}) [$videoCount فيديو • $photoCount صورة]"
+                            else "Download All Slides (${media.carouselItems.size}) [$videoCount Video • $photoCount Photo]",
                             url = media.carouselItems.first().url,
                             format = "carousel",
                             isHd = true
@@ -275,38 +278,69 @@ fun MediaPreviewModal(
                         }
                     )
 
-                    // Individual video quality (when the post also contains a video)
-                    media.qualityOptions.filter { it.format == "mp4" }.forEach { opt ->
+                    // 2. Quick filters for all videos or all photos
+                    if (videoCount > 0 && photoCount > 0) {
                         Spacer(modifier = Modifier.height(6.dp))
-                        QualityButton(
-                            option = opt,
-                            isArabic = isArabic,
-                            onClick = { onDownloadQuality(opt) }
-                        )
+                        media.qualityOptions.filter { it.format in listOf("mp4", "album", "jpg") && it.label.contains("جميع") }.forEach { opt ->
+                            QualityButton(
+                                option = opt,
+                                isArabic = isArabic,
+                                onClick = { onDownloadQuality(opt) }
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                        }
                     }
 
-                    if (!media.audioUrl.isNullOrBlank()) {
-                        Spacer(modifier = Modifier.height(8.dp))
+                    // 3. Individual slide items with crystal clear distinction
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = if (isArabic) "أو اختر عنصراً محدداً للتحميل:" else "Or download a specific item:",
+                        color = CyberTextMuted,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    media.carouselItems.forEachIndexed { idx, item ->
+                        val isVid = item.format == "mp4"
+                        val typeLabel = if (isVid) (if (isArabic) "فيديو MP4" else "Video MP4")
+                        else (if (isArabic) "صورة JPG" else "Photo JPG")
+                        val cleanLabel = if (item.label.contains("سلايد") || item.label.contains("Slide")) item.label
+                        else if (isArabic) "سلايد ${idx + 1} ($typeLabel)" else "Slide ${idx + 1} ($typeLabel)"
+
                         QualityButton(
                             option = QualityOption(
-                                label = if (isArabic) "تحميل الصوت فقط (MP3)" else "Download Audio Only (MP3)",
-                                url = media.audioUrl,
-                                format = "mp3"
+                                label = cleanLabel,
+                                url = item.url,
+                                format = item.format,
+                                isHd = true
                             ),
                             isArabic = isArabic,
                             onClick = {
                                 onDownloadQuality(
                                     QualityOption(
-                                        label = "Audio Only",
-                                        url = media.audioUrl,
-                                        format = "mp3"
+                                        label = cleanLabel,
+                                        url = item.url,
+                                        format = item.format,
+                                        isHd = true
                                     )
                                 )
                             }
                         )
+                        Spacer(modifier = Modifier.height(6.dp))
+                    }
+                } else if (media.qualityOptions.isNotEmpty()) {
+                    // Single Item (Video / Reel / Photo)
+                    media.qualityOptions.forEach { opt ->
+                        QualityButton(
+                            option = opt,
+                            isArabic = isArabic,
+                            onClick = { onDownloadQuality(opt) }
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
                     }
                 } else if (media.photoUrls.isNotEmpty()) {
-                    // Specialized Photo Album Layout
+                    // Photo Album fallback
                     val photoCount = media.photoUrls.size
                     val isSingle = photoCount == 1
                     QualityButton(
@@ -318,7 +352,7 @@ fun MediaPreviewModal(
                                 else "Download All Photos ($photoCount JPG)"
                             },
                             url = media.photoUrls.first(),
-                            format = "jpg",
+                            format = if (isSingle) "jpg" else "album",
                             isHd = true
                         ),
                         isArabic = isArabic,
@@ -327,52 +361,26 @@ fun MediaPreviewModal(
                                 QualityOption(
                                     label = if (isSingle) "Download Photo" else "Download All Photos",
                                     url = media.photoUrls.first(),
-                                    format = "jpg",
+                                    format = if (isSingle) "jpg" else "album",
                                     isHd = true
                                 )
                             )
                         }
                     )
-
-                    if (!media.audioUrl.isNullOrBlank()) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        QualityButton(
-                            option = QualityOption(
-                                label = if (isArabic) "تحميل الصوت فقط (MP3)" else "Download Audio Only (MP3)",
-                                url = media.audioUrl,
-                                format = "mp3"
-                            ),
-                            isArabic = isArabic,
-                            onClick = {
-                                onDownloadQuality(
-                                    QualityOption(
-                                        label = "Audio Only",
-                                        url = media.audioUrl,
-                                        format = "mp3"
-                                    )
-                                )
-                            }
-                        )
-                    }
-                } else if (media.qualityOptions.isNotEmpty()) {
-                    media.qualityOptions.forEach { opt ->
-                        QualityButton(
-                            option = opt,
-                            isArabic = isArabic,
-                            onClick = { onDownloadQuality(opt) }
-                        )
-                        Spacer(modifier = Modifier.height(6.dp))
-                    }
                 } else {
                     // Default Single HD Video Option
+                    val isVid = media.videoUrl.contains(".mp4") || !media.videoUrl.contains(".jpg")
+                    val format = if (isVid) "mp4" else "jpg"
                     QualityButton(
                         option = QualityOption(
-                            label = if (isArabic) "فيديو بجودة عالية (HD)" else "High Definition (HD)",
+                            label = if (isVid) (if (isArabic) "فيديو بجودة عالية (HD MP4)" else "High Definition (MP4)")
+                            else (if (isArabic) "صورة عالية الجودة (JPG)" else "High Quality (JPG)"),
                             url = media.videoUrl,
+                            format = format,
                             isHd = true
                         ),
                         isArabic = isArabic,
-                        onClick = { onDownloadQuality(null) }
+                        onClick = { onDownloadQuality(QualityOption(label = "Media", url = media.videoUrl, format = format)) }
                     )
                 }
 
