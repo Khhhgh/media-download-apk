@@ -35,7 +35,7 @@ def detect_platform(url: str) -> str:
         return "Twitter"
     elif "facebook.com" in lower or "fb.watch" in lower or "fb.com" in lower:
         return "Facebook"
-    elif "pinterest.com" in lower or "pin.it" in lower:
+    elif "pinterest.com" in lower or "pin.it" in lower or "pinimg.com" in lower:
         return "Pinterest"
     elif "threads.net" in lower:
         return "Threads"
