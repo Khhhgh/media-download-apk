@@ -9,12 +9,14 @@ import android.os.Environment
 import android.provider.Settings
 import android.util.Log
 import androidx.core.content.FileProvider
+import androidx.core.content.pm.PackageInfoCompat
 import com.example.model.AppUpdateInfo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
+import okhttp3.CacheControl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
@@ -40,86 +42,100 @@ class AppUpdateManager(
         .build()
 ) {
     private val tag = "AppUpdateManager"
-    private val repoReleasesUrl = "https://api.github.com/repos/Khhhgh/media-download-apk/releases/latest"
+
+    private fun packageInfo() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        context.packageManager.getPackageInfo(context.packageName, PackageManager.PackageInfoFlags.of(0))
+    } else {
+        @Suppress("DEPRECATION")
+        context.packageManager.getPackageInfo(context.packageName, 0)
+    }
 
     fun getCurrentVersionName(): String {
         return try {
-            val pInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                context.packageManager.getPackageInfo(context.packageName, PackageManager.PackageInfoFlags.of(0))
-            } else {
-                @Suppress("DEPRECATION")
-                context.packageManager.getPackageInfo(context.packageName, 0)
-            }
-            pInfo.versionName ?: "1.0"
+            packageInfo().versionName ?: "1.0"
         } catch (_: Exception) {
             "1.0"
         }
     }
 
+    private fun getCurrentVersionCode(): Long {
+        return try {
+            PackageInfoCompat.getLongVersionCode(packageInfo())
+        } catch (_: Exception) {
+            0L
+        }
+    }
+
+    /**
+     * Reads `app_version.json` from the source announced by the GitLab pointer
+     * ([UpdateSourceResolver]). No GitHub API call is ever made. Every failure (no source, 404,
+     * bad JSON, offline) is returned as `Result.failure` and is silent for the user.
+     */
     suspend fun checkForUpdates(): Result<AppUpdateInfo> = withContext(Dispatchers.IO) {
         val currentVersion = getCurrentVersionName()
+        val currentCode = getCurrentVersionCode()
         try {
+            val baseUrl = UpdateSourceResolver.getBaseUrl(context)
+                ?: return@withContext Result.failure(IOException("No update source available"))
+
             val request = Request.Builder()
-                .url(repoReleasesUrl)
-                .header("Accept", "application/vnd.github.v3+json")
-                .header("User-Agent", "MediaDownloadApp-UpdateChecker/1.0")
+                .url("$baseUrl/$APP_VERSION_FILE")
+                .header("User-Agent", EngineUpdateManager.USER_AGENT)
+                .header("Cache-Control", "no-cache")
+                .header("Pragma", "no-cache")
+                .cacheControl(CacheControl.FORCE_NETWORK)
                 .build()
 
-            val response = client.newCall(request).execute()
-            if (!response.isSuccessful) {
-                return@withContext Result.failure(IOException("GitHub API returned HTTP ${response.code}"))
+            val body = client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    return@withContext Result.failure(IOException("Update source returned HTTP ${response.code}"))
+                }
+                response.body?.string().orEmpty()
             }
-
-            val body = response.body?.string() ?: ""
             if (body.isBlank()) {
-                return@withContext Result.failure(IOException("Empty release response"))
+                return@withContext Result.failure(IOException("Empty app_version.json"))
             }
 
             val json = JSONObject(body)
-            val tagName = json.optString("tag_name", "").trim()
-            val releaseTitle = json.optString("name", tagName)
-            val releaseNotes = json.optString("body", "")
-            val htmlUrl = json.optString("html_url", "https://github.com/Khhhgh/media-download-apk/releases")
+            val remoteCode = json.optLong("versionCode", 0L)
+            val remoteName = json.optString("versionName", "").trim()
+            val apkUrl = json.optString("apkUrl", "").trim()
+            val notes = json.optString("releaseNotes", "")
+            val force = json.optBoolean("forceUpdate", false)
 
-            var apkUrl = ""
-            var fileSize = 0L
-
-            val assets = json.optJSONArray("assets")
-            if (assets != null) {
-                for (i in 0 until assets.length()) {
-                    val asset = assets.getJSONObject(i)
-                    val assetName = asset.optString("name", "")
-                    val downloadUrl = asset.optString("browser_download_url", "")
-                    if (assetName.endsWith(".apk", ignoreCase = true) && downloadUrl.isNotBlank()) {
-                        apkUrl = downloadUrl
-                        fileSize = asset.optLong("size", 0L)
-                        break
-                    }
-                }
+            if (remoteCode <= 0L && remoteName.isBlank()) {
+                return@withContext Result.failure(IOException("Invalid app_version.json"))
             }
+            // Only https APK links are ever offered to the user.
+            val safeApkUrl = if (apkUrl.startsWith("https://", ignoreCase = true)) apkUrl else ""
 
-            // If no asset matched .apk directly, fallback to standard GitHub release asset URL
-            if (apkUrl.isBlank() && tagName.isNotBlank()) {
-                apkUrl = "https://github.com/Khhhgh/media-download-apk/releases/download/$tagName/media-download-update.apk"
+            // The source answered with a valid document: remember it as the last good one.
+            UpdateSourceResolver.markValid(context, baseUrl)
+
+            val isNewer = if (remoteCode > 0L && currentCode > 0L) {
+                remoteCode > currentCode
+            } else {
+                isVersionNewer(latest = remoteName, current = currentVersion)
             }
-
-            val isNewer = isVersionNewer(latest = tagName, current = currentVersion)
 
             val updateInfo = AppUpdateInfo(
-                hasUpdate = isNewer,
-                latestVersion = tagName.removePrefix("v"),
+                hasUpdate = isNewer && safeApkUrl.isNotBlank(),
+                latestVersion = remoteName.removePrefix("v"),
                 currentVersion = currentVersion.removePrefix("v"),
-                releaseTitle = releaseTitle,
-                releaseNotes = releaseNotes,
-                apkDownloadUrl = apkUrl,
-                releasePageUrl = htmlUrl,
-                fileSize = fileSize
+                releaseTitle = if (remoteName.isNotBlank()) "v${remoteName.removePrefix("v")}" else "",
+                releaseNotes = notes,
+                apkDownloadUrl = safeApkUrl,
+                releasePageUrl = json.optString("releasePageUrl", safeApkUrl),
+                fileSize = json.optLong("fileSize", 0L),
+                forceUpdate = force
             )
 
-            Log.d(tag, "Checked update: current=$currentVersion, latest=$tagName, hasUpdate=$isNewer")
+            Log.d(tag, "Checked update: current=$currentVersion($currentCode), latest=$remoteName($remoteCode), hasUpdate=${updateInfo.hasUpdate}")
             Result.success(updateInfo)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
-            Log.w(tag, "Failed to check for update: ${e.message}")
+            Log.d(tag, "Update check skipped: ${e.message}")
             Result.failure(e)
         }
     }
@@ -239,5 +255,9 @@ class AppUpdateManager(
             Log.e(tag, "Failed to launch package installer: ${e.message}", e)
             false
         }
+    }
+
+    private companion object {
+        const val APP_VERSION_FILE = "app_version.json"
     }
 }

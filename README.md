@@ -23,14 +23,23 @@ View your app in AI Studio: https://ai.studio/apps/62f354d0-b375-4c02-8ec5-0191c
 
 ## نشر تحديث للمحركات (OTA) — بدون إصدار APK جديد
 
-التطبيق يقرأ `downapp/version.txt` عبر jsDelivr فقط (لا `api.github.com` ولا `raw.githubusercontent.com`):
-`https://cdn.jsdelivr.net/gh/Khhhgh/media-download-apk@main/downapp/version.txt?t=<timestamp>`
+التطبيق لا يحتوي أي رابط GitHub/jsDelivr. العنوان الثابت الوحيد هو ملف التوجيه على GitLab:
+`https://gitlab.com/msms22315/media-download-apk/-/raw/main/source_url.txt`
+
+سطره الأول يحمل رابط المشروع الحالي، مثلاً `https://github.com/<owner>/<repo>` (يُحوَّل وقت التشغيل إلى
+`https://cdn.jsdelivr.net/gh/<owner>/<repo>@main/downapp`)، أو رابط `https://` كامل لمجلد `downapp`.
+إذا توقف حساب GitHub: غيّر هذا السطر فقط وسيتبعه كل التطبيقات المثبتة.
+
+سلوك الفشل صامت دائماً: الوسيط غير متاح ← آخر رابط صالح محفوظ؛ لا رابط/404/انقطاع ← تُستخدم محركات
+بايثون المحلية دون أي رسالة. أخطاء `HASH_MISMATCH` و`5xx` تُعالج بصمت مع إعادة محاولة في الخلفية.
 
 بعد أي تعديل داخل `downapp/`:
 
 1. ارفع الرقم في `downapp/version.txt` (رقم صحيح أكبر من السابق).
-2. شغّل `python3 tools/gen_manifest.py` (يولّد `manifest.json` بنفس رقم الإصدار وبصمات SHA-256 صحيحة).
-3. ادفع إلى `main`.
-4. (اختياري، لتسريع الوصول) امسح كاش jsDelivr للملفات المتغيرة عبر واجهة الـ purge الخاصة بهم (`purge.jsdelivr.net`)؛ كاش فرع `@main` قد يصل لساعات.
+2. شغّل `python3 tools/gen_manifest.py` (يولّد `manifest.json` ويتحقق من `app_version.json`).
+3. ادفع إلى `main` — workflow `purge-cdn.yml` يمسح كاش jsDelivr تلقائياً.
+
+إصدار APK جديد: ارفع الـ APK في GitHub Releases ثم عدّل `downapp/app_version.json`
+(`versionCode`, `versionName`, `apkUrl`) وادفعه، فقط بعد أن يصبح رابط الـ APK متاحاً.
 
 الجدولة الخلفية كل 3 أيام + فحص صامت عند كل فتح للتطبيق. الإقلاع النظيف يُنزّل المحركات من الشبكة أولاً، ولا تُستخدم نسخة `assets` إلا دون اتصال.

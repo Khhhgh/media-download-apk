@@ -11,6 +11,7 @@ data class AppUpdateInfo(
     val releaseNotes: String = "",
     val apkDownloadUrl: String = "",
     val releasePageUrl: String = "",
-    val fileSize: Long = 0L
+    val fileSize: Long = 0L,
+    val forceUpdate: Boolean = false
 )
 

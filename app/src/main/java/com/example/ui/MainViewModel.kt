@@ -171,16 +171,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _showFirstRunSetup.value = false
                 _firstRunProgress.value = null
                 if (!result.provisioned) {
-                    // Offline last resort: bundled engines in use until a connection is available.
-                    emitToast(
-                        if (_isArabic.value) {
-                            "تعذر تنزيل أحدث المحركات (${result.error ?: "لا يوجد اتصال"}). " +
-                                "نعمل مؤقتاً بالنسخة المدمجة وسيُعاد التحديث عند توفر الاتصال."
-                        } else {
-                            "Couldn't download the latest engines (${result.error ?: "offline"}). " +
-                                "Using the built-in copy for now; it will update once you're online."
-                        }
-                    )
+                    // Offline / unreachable source: bundled engines are used silently and the
+                    // background sync retries later. Nothing is shown to the user.
+                    Log.i("MainViewModel", "Using bundled engines (${result.error ?: "offline"})")
                 }
             } else {
                 _firstRunError.value = result.error ?: "فشل التهيئة الأولية"

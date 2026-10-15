@@ -1,0 +1,46 @@
+name: Purge jsDelivr CDN Cache
+
+# build.yml ignores downapp/** on purpose (engine-only pushes must not rebuild the APK),
+# so the purge lives in its own workflow that fires exactly on those pushes.
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'downapp/**'
+  workflow_dispatch:
+
+concurrency:
+  group: purge-cdn-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  purge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Purge jsDelivr CDN Cache
+        env:
+          # Follows the repository automatically, so it keeps working after a move to a new account.
+          REPO: ${{ github.repository }}
+        run: |
+          BASE="https://purge.jsdelivr.net/gh/${REPO}@main/downapp"
+
+          # Files the app reads on every check first, then every engine file in downapp/.
+          FILES="version.txt manifest.json app_version.json"
+          for f in $(git ls-files downapp | sed 's#^downapp/##' | grep -v '\.pyc$'); do
+            case " $FILES " in *" $f "*) ;; *) FILES="$FILES $f" ;; esac
+          done
+
+          for f in $FILES; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "${BASE}/${f}" || echo 000)
+            echo "purge ${f} -> HTTP ${code}"
+          done
+
+          # A second pass a few seconds later covers edges that were still syncing.
+          sleep 5
+          for f in version.txt manifest.json app_version.json; do
+            curl -s -o /dev/null --max-time 20 "${BASE}/${f}" || true
+          done
+          echo "jsDelivr purge requested for ${REPO}@main"
