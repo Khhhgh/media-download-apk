@@ -1,15 +1,21 @@
-
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 """
-TikTok Dynamic Media Extraction Engine
-Keeps the existing extract() return schema and URL resolution.
-Strategies:
-1. TikWM
-2. Public fallback API
-3. yt-dlp fallback
-Each strategy has a 12-second timeout.
+TikTok Dynamic Media Extraction Engine (downapp/Tiktok/engine.py)
+
+Extraction runs on the device itself, so when the ISP blocks TikTok the direct
+approaches fail. The engine therefore tries, in order:
+
+1. TikWM      - third-party API, tried on several hosts (direct), then through
+                public relays when the hosts themselves are blocked.
+2. ssstik     - third-party page scraper; its download links point at
+                tikcdn.io (a downloader proxy, not tiktok.com), so the media
+                stays reachable even on a blocked network.
+3. Fallback   - generic public worker API.
+4. yt-dlp     - native fallback when the binary is present.
+
+Every strategy keeps the same return schema.
 """
 
 import json
@@ -22,7 +28,7 @@ from typing import Any, Dict, Optional
 from urllib.parse import urlencode
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from common import http_get, http_post, UNIVERSAL_USER_AGENT
+from common import http_get, http_post, relay_get, UNIVERSAL_USER_AGENT, MOBILE_USER_AGENT
 
 
 TIMEOUT = 12
@@ -30,11 +36,17 @@ TIMEOUT = 12
 TIKWM_ENDPOINTS = [
     "https://www.tikwm.com/api/",
     "https://tikwm.com/api/",
+    "https://api.tikwm.com/api/",
 ]
 
 # Public third-party fallback API.
 # Availability and rate limits are controlled by its operator.
 FALLBACK_API = "https://tdownv4.sl-bjs.workers.dev/"
+
+SSSTIK_HOME = "https://ssstik.io/en"
+SSSTIK_POST = "https://ssstik.io/abc?url=dl"
+# ssstik keeps a stable token; used when the home page cannot be fetched.
+SSSTIK_DEFAULT_TOKEN = "S0M3d204"
 
 
 def resolve_tiktok_url(url: str) -> str:
@@ -157,20 +169,72 @@ def _base_result(
     }
 
 
+def _parse_tikwm_data(data: Dict[str, Any], target: str) -> Dict[str, Any]:
+    """Builds a result from a TikWM `data` object. Raises on unusable payloads."""
+    author_data = data.get("author") or {}
+    author = (
+        author_data.get("unique_id")
+        or author_data.get("nickname")
+        or ""
+    )
+
+    title = data.get("title") or "TikTok Media"
+    cover = _fix_url(data.get("cover") or data.get("origin_cover"))
+    audio = _fix_url(data.get("music") or data.get("play_url"))
+
+    images = data.get("images") or data.get("imagePost") or []
+    if isinstance(images, list):
+        photos = [fixed for item in images if (fixed := _fix_url(item))]
+    else:
+        photos = []
+
+    if photos:
+        return _base_result(title, author, target, cover=cover, audio=audio, photos=photos)
+
+    hd = _fix_url(data.get("hdplay"))
+    sd = _fix_url(data.get("play") or data.get("wmplay"))
+    video = hd or sd
+
+    if not (video and _valid_media_url(video)):
+        raise ValueError("TikWM response has no usable media URL")
+
+    result = _base_result(title, author, target, video=video, cover=cover, audio=audio)
+
+    # Preserve HD and SD choices when both are available.
+    options = []
+    if hd:
+        options.append({
+            "label": "فيديو عالي الدقة (HD MP4)",
+            "url": hd,
+            "format": "mp4",
+            "isHd": True,
+        })
+    if sd and sd != hd:
+        options.append({
+            "label": "فيديو سريع (SD MP4)",
+            "url": sd,
+            "format": "mp4",
+            "isHd": False,
+        })
+    if audio:
+        options.append({
+            "label": "تحميل الصوت الأصلي",
+            "url": audio,
+            "format": "mp3",
+            "isHd": False,
+        })
+    if options:
+        result["qualityOptions"] = options
+    return result
+
+
 def _extract_tikwm(target: str) -> Dict[str, Any]:
     errors = []
 
     for endpoint in TIKWM_ENDPOINTS:
         try:
-            status, body, _ = http_post(
-                endpoint,
-                data={
-                    "url": target,
-                    "count": 12,
-                    "cursor": 0,
-                    "web": 1,
-                    "hd": 1,
-                },
+            status, body, _ = http_get(
+                endpoint + "?" + urlencode({"url": target, "hd": 1}),
                 headers={
                     "User-Agent": UNIVERSAL_USER_AGENT,
                     "Referer": "https://www.tikwm.com/",
@@ -180,88 +244,130 @@ def _extract_tikwm(target: str) -> Dict[str, Any]:
             )
 
             if status != 200:
-                errors.append(f"TikWM HTTP {status}")
+                errors.append(f"{endpoint} HTTP {status}")
                 continue
 
             result = json.loads(body)
             if result.get("code") != 0:
-                errors.append(str(result.get("msg") or "TikWM rejected request"))
+                errors.append(f"{endpoint}: {result.get('msg') or 'rejected'}")
                 continue
 
             data = result.get("data") or {}
             if not data:
-                errors.append("TikWM returned empty data")
+                errors.append(f"{endpoint} returned empty data")
                 continue
 
-            author_data = data.get("author") or {}
-            author = (
-                author_data.get("unique_id")
-                or author_data.get("nickname")
-                or ""
-            )
-
-            title = data.get("title") or "TikTok Media"
-            cover = _fix_url(data.get("cover") or data.get("origin_cover"))
-            audio = _fix_url(data.get("music") or data.get("play_url"))
-
-            images = data.get("images") or data.get("imagePost") or []
-            if isinstance(images, list):
-                photos = [
-                    fixed for item in images
-                    if (fixed := _fix_url(item))
-                ]
-            else:
-                photos = []
-
-            if photos:
-                return _base_result(
-                    title, author, target,
-                    cover=cover, audio=audio, photos=photos
-                )
-
-            hd = _fix_url(data.get("hdplay"))
-            sd = _fix_url(data.get("play") or data.get("wmplay"))
-            video = hd or sd
-
-            if video and _valid_media_url(video):
-                result = _base_result(
-                    title, author, target,
-                    video=video, cover=cover, audio=audio
-                )
-
-                # Preserve HD and SD choices when both are available.
-                options = []
-                if hd:
-                    options.append({
-                        "label": "فيديو عالي الدقة (HD MP4)",
-                        "url": hd,
-                        "format": "mp4",
-                        "isHd": True,
-                    })
-                if sd and sd != hd:
-                    options.append({
-                        "label": "فيديو سريع (SD MP4)",
-                        "url": sd,
-                        "format": "mp4",
-                        "isHd": False,
-                    })
-                if audio:
-                    options.append({
-                        "label": "تحميل الصوت الأصلي",
-                        "url": audio,
-                        "format": "mp3",
-                        "isHd": False,
-                    })
-                if options:
-                    result["qualityOptions"] = options
-                return result
-
-            errors.append("TikWM response has no usable media URL")
+            return _parse_tikwm_data(data, target)
 
         except Exception as exc:
-            errors.append(f"{type(exc).__name__}: {exc}")
+            errors.append(f"{endpoint}: {type(exc).__name__}: {exc}")
 
     raise ValueError("; ".join(errors[-4:]) or "TikWM failed")
+
+
+def _extract_tikwm_relay(target: str) -> Dict[str, Any]:
+    """Same TikWM API, fetched through a public relay (blocked-network path)."""
+    api = "https://www.tikwm.com/api/?" + urlencode({"url": target, "hd": 1})
+    status, body, _ = relay_get(
+        api,
+        headers={
+            "User-Agent": UNIVERSAL_USER_AGENT,
+            "Referer": "https://www.tikwm.com/",
+            "Accept": "application/json, text/plain, */*",
+        },
+        timeout=max(TIMEOUT, 25),
+        min_length=40,
+        response_format="text",
+    )
+    if status != 200:
+        raise ValueError("TikWM relay unavailable")
+
+    # Some relays prepend a tiny text wrapper; keep only the JSON object.
+    start = body.find("{")
+    if start > 0:
+        body = body[start:]
+
+    result = json.loads(body)
+    if result.get("code") != 0:
+        raise ValueError(result.get("msg") or "TikWM relay rejected request")
+
+    data = result.get("data") or {}
+    if not data:
+        raise ValueError("TikWM relay returned empty data")
+
+    return _parse_tikwm_data(data, target)
+
+
+def _extract_ssstik(target: str) -> Dict[str, Any]:
+    """Scrapes ssstik.io; its links live on tikcdn.io (works on blocked networks)."""
+    status, home, _ = http_get(
+        SSSTIK_HOME,
+        headers={"User-Agent": UNIVERSAL_USER_AGENT, "Accept": "text/html,*/*"},
+        timeout=TIMEOUT,
+    )
+
+    token = ""
+    if status == 200 and home:
+        match = re.search(r"s_tt\s*=\s*'([^']+)'", home)
+        if match:
+            token = match.group(1)
+    if not token:
+        token = SSSTIK_DEFAULT_TOKEN
+
+    status, body, _ = http_post(
+        SSSTIK_POST,
+        data={"id": target, "locale": "en", "tt": token},
+        headers={
+            "User-Agent": UNIVERSAL_USER_AGENT,
+            "Accept": "*/*",
+            "hx-request": "true",
+            "hx-current-url": SSSTIK_HOME,
+            "hx-target": "targetsContainer",
+            "Origin": "https://ssstik.io",
+            "Referer": SSSTIK_HOME,
+        },
+        timeout=TIMEOUT,
+    )
+    if status != 200 or not body:
+        raise ValueError(f"ssstik HTTP {status}")
+
+    links = []
+    for match in re.finditer(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', body, re.S):
+        href = match.group(1).strip()
+        label = re.sub(r"<[^>]+>", " ", match.group(2)).strip().lower()
+        if href.startswith("http"):
+            links.append((href, label))
+
+    video = next((h for h, label in links if "watermark" in label), None)
+    if not video:
+        video = next((h for h, label in links if h.endswith(".mp4")), None)
+    audio = next((h for h, label in links if "mp3" in label), None)
+
+    if not (video and _valid_media_url(video)):
+        raise ValueError("ssstik returned no download link")
+
+    cover_match = re.search(r'<img[^>]+src=["\'](https?://[^"\']+)["\']', body)
+    cover = cover_match.group(1) if cover_match else None
+    title_match = re.search(r'class=["\']maintext["\'][^>]*>([^<]+)', body)
+    title = title_match.group(1).strip() if title_match else "TikTok Video"
+
+    result = _base_result(title, "", target, video=video, cover=cover, audio=audio)
+
+    options = [{
+        "label": "فيديو بدون علامة مائية (MP4)",
+        "url": video,
+        "format": "mp4",
+        "isHd": True,
+    }]
+    if audio:
+        options.append({
+            "label": "تحميل الصوت الأصلي",
+            "url": audio,
+            "format": "mp3",
+            "isHd": False,
+        })
+    result["qualityOptions"] = options
+    return result
 
 
 def _extract_fallback_api(target: str) -> Dict[str, Any]:
@@ -277,6 +383,11 @@ def _extract_fallback_api(target: str) -> Dict[str, Any]:
         timeout=TIMEOUT,
     )
 
+    if status != 200:
+        # worker host may be blocked too: retry through a relay
+        status, body, _ = relay_get(
+            endpoint, timeout=max(TIMEOUT, 25), min_length=40, response_format="text"
+        )
     if status != 200:
         raise ValueError(f"Fallback API HTTP {status}")
 
@@ -317,10 +428,7 @@ def _extract_fallback_api(target: str) -> Dict[str, Any]:
 
     images = data.get("images") or data.get("image_urls") or []
     if isinstance(images, list):
-        photos = [
-            fixed for item in images
-            if (fixed := _fix_url(item))
-        ]
+        photos = [fixed for item in images if (fixed := _fix_url(item))]
     else:
         photos = []
 
@@ -442,6 +550,8 @@ def extract(url: str, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
 
     strategies = [
         ("TikWM", _extract_tikwm),
+        ("TikWM(relay)", _extract_tikwm_relay),
+        ("ssstik", _extract_ssstik),
         ("Fallback API", _extract_fallback_api),
         ("yt-dlp", _extract_ytdlp),
     ]
@@ -470,6 +580,6 @@ def extract(url: str, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
                 pass
 
     raise ValueError(
-        "All TikTok extraction strategies failed | "
+        "Failed to extract TikTok media: Unknown error | "
         + " | ".join(errors)
-    )
+            )
