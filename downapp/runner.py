@@ -17,7 +17,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-from common import auto_install_requirements, http_get
+# Do not leave __pycache__ behind in the app package folder.
+sys.dont_write_bytecode = True
+
+from common import auto_install_requirements, cleanup_temp, http_get
 
 
 def detect_platform(url: str) -> str:
@@ -111,13 +114,16 @@ def run(url: str) -> Dict[str, Any]:
     platform = detect_platform(url)
     engine_path = os.path.join(BASE_DIR, platform, "engine.py")
 
-    if os.path.exists(engine_path):
-        spec = importlib.util.spec_from_file_location(f"{platform}.engine", engine_path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module.extract(url)
-    else:
+    try:
+        if os.path.exists(engine_path):
+            spec = importlib.util.spec_from_file_location(f"{platform}.engine", engine_path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module.extract(url)
         return extract_universal(url)
+    finally:
+        # Cleaning the temporary leftovers is part of finishing the job.
+        cleanup_temp(BASE_DIR)
 
 
 if __name__ == "__main__":
