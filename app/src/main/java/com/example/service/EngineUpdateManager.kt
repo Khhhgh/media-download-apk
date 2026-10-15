@@ -52,7 +52,7 @@ data class EngineUpdateResult(
  *
  * CDN friendliness (1M-user scale):
  * - No per-request timestamps (`?t=`): the natural, stable CDN cache is used. Freshness is
- *   guaranteed by the CI purge step that runs on every push to `downapp/**`.
+ *    * - guaranteed by the CI purge step that runs on every push to `downapp`.
  * - Engine files are requested as `<file>?v=<remoteVersion>` so each release has its own URL.
  *
  * Safety rules:
