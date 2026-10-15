@@ -20,6 +20,9 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
+# Do not leave __pycache__ behind in the app package folder.
+sys.dont_write_bytecode = True
+
 from runner import run
 
 
