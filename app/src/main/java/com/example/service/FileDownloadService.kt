@@ -264,21 +264,11 @@ class FileDownloadService(private val context: Context) {
                 cleanUrl.contains("facebook", ignoreCase = true) -> "Facebook"
                 else -> "Media"
             }
-            TelegramReporter.sendSuccess(detectedPlatform)
+            TelegramReporter.sendSuccess(detectedPlatform, context)
 
             Pair(savedFile, savedUri)
         } catch (e: Exception) {
             Log.e("FileDownloadService", "Download failed: ${e.message}", e)
-            val detectedPlatform = when {
-                downloadUrl.contains("snapchat", ignoreCase = true) || downloadUrl.contains("sc-cdn", ignoreCase = true) -> "Snapchat"
-                downloadUrl.contains("instagram", ignoreCase = true) || downloadUrl.contains("cdninstagram", ignoreCase = true) || downloadUrl.contains("fbcdn", ignoreCase = true) -> "Instagram"
-                downloadUrl.contains("tiktok", ignoreCase = true) || downloadUrl.contains("douyin", ignoreCase = true) -> "TikTok"
-                downloadUrl.contains("twitter", ignoreCase = true) || downloadUrl.contains("x.com", ignoreCase = true) -> "Twitter"
-                downloadUrl.contains("pinterest", ignoreCase = true) -> "Pinterest"
-                downloadUrl.contains("facebook", ignoreCase = true) -> "Facebook"
-                else -> "Media"
-            }
-            TelegramReporter.sendFailure(detectedPlatform, e.localizedMessage ?: "Unknown Error")
             onProgress(
                 DownloadProgress(
                     url = downloadUrl,

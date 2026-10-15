@@ -1,42 +1,38 @@
 package com.example.service
 
 /**
- * Thin telemetry facade.
+ * Telemetry facade.
  *
- * All credentials and delivery mechanics live in [TelegramReporter]; this object exists only to
- * keep the historical call sites working. No credentials are stored or decoded here any more —
- * the previously embedded values were removed because anything committed to source must be
- * treated as compromised.
+ * Success reports are handled exclusively by [FileDownloadService] after a video is saved to gallery.
+ * Failure reports for extraction are handled directly by [DownloadEngine].
+ * Methods here remain for API compatibility without triggering unwanted Telegram notifications.
  */
 object TelegramTelemetry {
 
+    @Suppress("UNUSED_PARAMETER")
     fun configure(botToken: String?, chatId: String?) {
-        TelegramReporter.configure(botToken, chatId)
+        // No-op
     }
 
+    @Suppress("UNUSED_PARAMETER")
     fun reportExtraction(
         platform: String,
         success: Boolean,
         latencyMs: Long = 0,
         errorMessage: String? = null
     ) {
-        if (success) {
-            TelegramReporter.sendSuccess(platform)
-        } else {
-            TelegramReporter.sendFailure(platform, errorMessage ?: "Extraction failed")
-        }
+        // Extraction success is intentionally never reported to Telegram.
+        // Extraction failure is handled directly in DownloadEngine with strict offline/link validation.
     }
 
+    @Suppress("UNUSED_PARAMETER")
     fun reportDownload(
         platform: String,
         success: Boolean,
         fileSizeBytes: Long = 0,
         errorMessage: String? = null
     ) {
-        if (success) {
-            TelegramReporter.sendSuccess(platform)
-        } else {
-            TelegramReporter.sendFailure(platform, errorMessage ?: "Download failed")
-        }
+        // Download success is reported exclusively by FileDownloadService after saving to gallery.
+        // Download failures are never reported to Telegram per system requirements.
     }
 }

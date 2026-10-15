@@ -2634,7 +2634,6 @@ class MasterDownloadEngine(
         val cached = ScaleArchitecture.mediaCache.get(cleanUrl)
         if (cached != null) {
             Log.d("MasterDownloadEngine", "Cache HIT for URL: $cleanUrl")
-            TelegramTelemetry.reportExtraction(cached.platform, success = true, latencyMs = 0)
             return@withContext cached
         }
 
@@ -2645,13 +2644,41 @@ class MasterDownloadEngine(
                 ScaleArchitecture.mediaCache.put(cleanUrl, res)
                 res
             }
-            TelegramReporter.sendSuccess(result.platform)
             result
         } catch (e: Exception) {
-            val detected = DynamicEngineRouter.route(cleanUrl).platformName
-            TelegramReporter.sendFailure(detected, e.localizedMessage ?: "Extraction failed")
+            if (!isUnreportableError(e, cleanUrl)) {
+                val detected = DynamicEngineRouter.route(cleanUrl).platformName
+                val reason = e.localizedMessage ?: e.message ?: "Extraction failed"
+                TelegramReporter.sendFailure(detected, reason, context)
+            }
             throw e
         }
+    }
+
+    private fun isUnreportableError(e: Throwable, cleanUrl: String): Boolean {
+        if (cleanUrl.isBlank()) return true
+        if (e is IllegalArgumentException || e is YouTubeBlockedException) return true
+
+        if (e is java.net.UnknownHostException ||
+            e is java.net.ConnectException ||
+            e is java.net.NoRouteToHostException) {
+            return true
+        }
+
+        context?.let { ctx ->
+            try {
+                val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+                val net = cm?.activeNetwork ?: return true
+                val caps = cm.getNetworkCapabilities(net) ?: return true
+                if (!caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                    return true
+                }
+            } catch (_: Throwable) {
+            }
+        }
+
+        val msg = e.message?.lowercase().orEmpty()
+        return msg.contains("invalid") || msg.contains("غير صالح") || msg.contains("not supported")
     }
 
     private suspend fun executeResolution(cleanUrl: String): MediaResult = withContext(Dispatchers.IO) {

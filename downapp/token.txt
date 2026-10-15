@@ -1,0 +1,4 @@
+# Telegram reporting credentials (OTA sync)
+# Empty values = reporting disabled silently
+token = ""
+idgroup = ""
