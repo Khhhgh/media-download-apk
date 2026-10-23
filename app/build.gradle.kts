@@ -1,37 +1,8 @@
-import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
-import java.io.File
-
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.kotlin.compose)
   alias(libs.plugins.google.devtools.ksp)
   alias(libs.plugins.secrets)
-  alias(libs.plugins.google.services)
-  alias(libs.plugins.chaquopy)
-}
-
-// Host Python interpreter used by Chaquopy to build the on-device Python runtime.
-val chaquopyBuildPython: String = run {
-  val override = (findProperty("chaquopy.buildPython") as String?)
-    ?: System.getenv("CHAQUOPY_BUILD_PYTHON")
-  if (!override.isNullOrBlank()) {
-    override
-  } else {
-    val candidates = listOf(
-      "/usr/bin/python3.12",
-      "/usr/local/bin/python3.12",
-      "/opt/hostedtoolcache/Python/3.12.0/x64/bin/python3.12",
-      "/usr/bin/python3",
-    )
-    candidates.firstOrNull { File(it).isFile } ?: "python3.12"
-  }
-}
-
-val downappAssetsDir: java.io.File = layout.buildDirectory.dir("generated/downappAssets").get().asFile
-val copyDownappEngines = tasks.register<Copy>("copyDownappEngines") {
-  from(rootProject.layout.projectDirectory.dir("downapp"))
-  into(downappAssetsDir.resolve("engines"))
-  exclude("**/__pycache__/**", "**/*.pyc")
 }
 
 android {
@@ -42,8 +13,8 @@ android {
     applicationId = "com.mediadownload.app.v12"
     minSdk = 24
     targetSdk = 36
-    versionCode = 15
-    versionName = "1.0.14"
+    versionCode = 23
+    versionName = "1.0.22"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -112,27 +83,11 @@ android {
     compose = true
     buildConfig = true
   }
-  sourceSets {
-    getByName("main") {
-      assets.srcDir(downappAssetsDir)
+  testOptions {
+    unitTests {
+      isIncludeAndroidResources = true
     }
   }
-  testOptions { unitTests { isIncludeAndroidResources = true } }
-  dependenciesInfo {
-    includeInApk = false
-    includeInBundle = true
-  }
-}
-
-chaquopy {
-  defaultConfig {
-    version = "3.12"
-    buildPython(chaquopyBuildPython)
-  }
-}
-
-tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
-  dependsOn(copyDownappEngines)
 }
 
 secrets {
@@ -141,11 +96,8 @@ secrets {
   ignoreList.add("FIREBASE_APPCHECK_DEBUG_TOKEN")
 }
 
-googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN }
-
 dependencies {
   implementation(platform(libs.androidx.compose.bom))
-  implementation(platform(libs.firebase.bom))
   implementation(libs.androidx.activity.compose)
   implementation(libs.androidx.compose.material.icons.core)
   implementation(libs.androidx.compose.material.icons.extended)
@@ -182,12 +134,13 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.test.manifest)
   debugImplementation(libs.androidx.compose.ui.tooling)
   "ksp"(libs.androidx.room.compiler)
-  "ksp"(libs.moshi.kotlin.codegen)
 }
 
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
   compilerOptions {
+    jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11)
     allWarningsAsErrors.set(false)
     freeCompilerArgs.add("-Xannotation-default-target=param-property")
   }
 }
+

@@ -1,46 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:aapt="http://schemas.android.com/aapt"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-
-    <!-- Glowing cyan/blue rounded media emblem card -->
-    <path
-        android:pathData="M34,26 C34,22.68 36.68,20 40,20 L68,20 C71.32,20 74,22.68 74,26 L74,78 C74,81.32 71.32,84 68,84 L40,84 C36.68,84 34,81.32 34,78 Z"
-        android:strokeColor="#2563EB"
-        android:strokeWidth="2.5"
-        android:fillColor="#151D2F" />
-
-    <!-- Download Arrow with Cyan-Blue Gradient -->
-    <path
-        android:pathData="M54,32 L54,58 M43,47 L54,58 L65,47"
-        android:strokeWidth="5"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round">
-        <aapt:attr name="android:strokeColor">
-            <gradient
-                android:startX="43"
-                android:startY="32"
-                android:endX="65"
-                android:endY="58"
-                android:type="linear">
-                <item android:offset="0.0" android:color="#00F2FE" />
-                <item android:offset="1.0" android:color="#2563EB" />
-            </gradient>
-        </aapt:attr>
-    </path>
-
-    <!-- Base Tray Bar -->
-    <path
-        android:pathData="M43,68 L65,68"
-        android:strokeColor="#00F2FE"
-        android:strokeWidth="4"
-        android:strokeLineCap="round" />
-
-    <!-- Small sparkling media indicator dot -->
-    <path
-        android:pathData="M65,28 A2.5,2.5 0 1,1 60,28 A2.5,2.5 0 1,1 65,28"
-        android:fillColor="#00F2FE" />
-</vector>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:width="72dp"
+        android:height="72dp"
+        android:drawable="@drawable/ic_launcher_foreground_asset"
+        android:gravity="center" />
+</layer-list>

@@ -4,9 +4,6 @@ import android.app.Application
 
 /**
  * Application entry point.
- *
- * Engine synchronisation is scheduled from [MainActivity] (3-day WorkManager job) and checked
- * silently at every launch from the ViewModel. Python is intentionally *not* started here: it
- * is started lazily on first extraction/setup to keep cold start fast.
+ * Clean, lightweight Thin Client connected to Ubuntu VPS API (https://thaker.duckdns.org/api/extract).
  */
 class App : Application()

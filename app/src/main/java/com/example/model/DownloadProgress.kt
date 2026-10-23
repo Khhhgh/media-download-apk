@@ -11,5 +11,8 @@ data class DownloadProgress(
     val isSuccess: Boolean = false,
     val isError: Boolean = false,
     val errorMessage: String = "",
-    val savedPath: String? = null
+    val savedPath: String? = null,
+    val batchCurrent: Int = 0,
+    val batchTotal: Int = 0,
+    val statusMessage: String = ""
 )

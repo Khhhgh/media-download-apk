@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -23,6 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.ElectricBolt
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -50,6 +52,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.model.PlatformInfo
 import com.example.ui.theme.CyberBackground
 import com.example.ui.theme.CyberBorder
 import com.example.ui.theme.CyberSurfaceCard
@@ -57,7 +60,9 @@ import com.example.ui.theme.CyberTextMuted
 import com.example.ui.theme.CyberTextPrimary
 import com.example.ui.theme.CyberTextSecondary
 import com.example.ui.theme.ElectricBlue
+import com.example.ui.theme.ElectricViolet
 import com.example.ui.theme.NeonCyan
+import com.example.ui.theme.WarningAmber
 
 @Composable
 fun UrlInputCard(
@@ -65,6 +70,7 @@ fun UrlInputCard(
     isArabic: Boolean,
     isLoading: Boolean,
     clipboardDetectedUrl: String?,
+    detectedPlatform: PlatformInfo?,
     onUrlChange: (String) -> Unit,
     onPasteClick: () -> Unit,
     onClearClick: () -> Unit,
@@ -87,15 +93,15 @@ fun UrlInputCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(bottom = 12.dp)
-                    .clip(RoundedCornerShape(14.dp))
+                    .clip(RoundedCornerShape(16.dp))
                     .background(
                         Brush.horizontalGradient(
-                            listOf(Color(0xFF0C2444), Color(0xFF0F3254))
+                            listOf(Color(0xFF282518), Color(0xFF1D1B13))
                         )
                     )
-                    .border(1.dp, NeonCyan.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
+                    .border(1.dp, NeonCyan.copy(alpha = 0.6f), RoundedCornerShape(16.dp))
                     .clickable { onPasteClick() }
-                    .padding(horizontal = 14.dp, vertical = 10.dp)
+                    .padding(horizontal = 14.dp, vertical = 11.dp)
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -106,12 +112,20 @@ fun UrlInputCard(
                         modifier = Modifier.weight(1f),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.ContentPaste,
-                            contentDescription = "Clipboard",
-                            tint = NeonCyan,
-                            modifier = Modifier.size(20.dp)
-                        )
+                        Box(
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clip(CircleShape)
+                                .background(ElectricViolet.copy(alpha = 0.25f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ContentPaste,
+                                contentDescription = "Clipboard",
+                                tint = NeonCyan,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text(
@@ -132,13 +146,15 @@ fun UrlInputCard(
 
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(ElectricBlue)
-                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(
+                                Brush.horizontalGradient(listOf(NeonCyan, ElectricViolet))
+                            )
+                            .padding(horizontal = 12.dp, vertical = 7.dp)
                     ) {
                         Text(
                             text = if (isArabic) "لصق وتحميل" else "Paste",
-                            color = Color.White,
+                            color = Color(0xFF141417),
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold
                         )
@@ -151,34 +167,72 @@ fun UrlInputCard(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(20.dp))
+                .clip(RoundedCornerShape(22.dp))
                 .background(CyberSurfaceCard)
-                .border(1.dp, CyberBorder, RoundedCornerShape(20.dp))
-                .padding(16.dp)
+                .border(1.dp, CyberBorder, RoundedCornerShape(22.dp))
+                .padding(18.dp)
         ) {
             Column {
-                Text(
-                    text = if (isArabic) "أدخل رابط الفيديو أو المنشور" else "Paste Media or Video URL",
-                    color = CyberTextPrimary,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = if (isArabic) "أدخل رابط المنشور أو الفيديو" else "Enter Media Link",
+                        color = CyberTextPrimary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
 
-                Spacer(modifier = Modifier.height(10.dp))
+                    // Live Detected Platform Badge
+                    if (detectedPlatform != null) {
+                        val pColor = getPlatformColor(detectedPlatform.id)
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(pColor.copy(alpha = 0.15f))
+                                .border(1.dp, pColor.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .clip(CircleShape)
+                                    .background(pColor)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = detectedPlatform.getDisplayName(isArabic),
+                                color = pColor,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
 
-                // Explicit LTR Directionality for URL input field to prevent clipping, cursor inversion, or RTL distortion
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Explicit LTR for URL input field (White Search Bar with dark crisp text)
                 CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
                     OutlinedTextField(
                         value = url,
                         onValueChange = onUrlChange,
-                        textStyle = LocalTextStyle.current.copy(textDirection = TextDirection.Ltr),
+                        textStyle = LocalTextStyle.current.copy(
+                            textDirection = TextDirection.Ltr,
+                            color = Color(0xFF141417),
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 14.sp
+                        ),
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("url_input_field"),
                         placeholder = {
                             Text(
-                                text = if (isArabic) "https://www.tiktok.com/... أو instagram أو x" else "https://tiktok.com/... or Instagram, X, etc.",
-                                color = CyberTextMuted,
+                                text = if (isArabic) "https://www.tiktok.com/... أو Instagram، Facebook" else "https://tiktok.com/... or Instagram, FB, etc.",
+                                color = Color(0xFF6B7280),
                                 fontSize = 13.sp
                             )
                         },
@@ -186,7 +240,7 @@ fun UrlInputCard(
                             Icon(
                                 imageVector = Icons.Default.Link,
                                 contentDescription = "Link",
-                                tint = NeonCyan
+                                tint = if (detectedPlatform != null) getPlatformColor(detectedPlatform.id) else Color(0xFFD97706)
                             )
                         },
                         trailingIcon = {
@@ -196,7 +250,7 @@ fun UrlInputCard(
                                         Icon(
                                             imageVector = Icons.Default.Clear,
                                             contentDescription = "Clear",
-                                            tint = CyberTextMuted
+                                            tint = Color(0xFF6B7280)
                                         )
                                     }
                                 }
@@ -204,20 +258,23 @@ fun UrlInputCard(
                                     Icon(
                                         imageVector = Icons.Default.ContentPaste,
                                         contentDescription = "Paste",
-                                        tint = NeonCyan
+                                        tint = Color(0xFFD97706)
                                     )
                                 }
                             }
                         },
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = CyberBackground,
-                            unfocusedContainerColor = CyberBackground,
+                            focusedContainerColor = Color.White,
+                            unfocusedContainerColor = Color.White,
                             focusedBorderColor = NeonCyan,
-                            unfocusedBorderColor = CyberBorder,
-                            focusedTextColor = CyberTextPrimary,
-                            unfocusedTextColor = CyberTextPrimary
+                            unfocusedBorderColor = Color(0xFFD1D5DB),
+                            focusedTextColor = Color(0xFF141417),
+                            unfocusedTextColor = Color(0xFF141417),
+                            cursorColor = Color(0xFF141417),
+                            focusedPlaceholderColor = Color(0xFF6B7280),
+                            unfocusedPlaceholderColor = Color(0xFF6B7280)
                         ),
-                        shape = RoundedCornerShape(12.dp),
+                        shape = RoundedCornerShape(14.dp),
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(
                             keyboardType = KeyboardType.Uri,
@@ -229,9 +286,9 @@ fun UrlInputCard(
                     )
                 }
 
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
-                // Big Gradient Download Action Button
+                // Luxury Yellow Action Button (ابدا)
                 Button(
                     onClick = onSubmit,
                     enabled = !isLoading,
@@ -242,7 +299,8 @@ fun UrlInputCard(
                     shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = Color.Transparent
-                    )
+                    ),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)
                 ) {
                     Box(
                         modifier = Modifier
@@ -251,7 +309,7 @@ fun UrlInputCard(
                             .clip(RoundedCornerShape(14.dp))
                             .background(
                                 Brush.horizontalGradient(
-                                    listOf(ElectricBlue, NeonCyan)
+                                    listOf(NeonCyan, ElectricViolet, ElectricBlue)
                                 )
                             ),
                         contentAlignment = Alignment.Center
@@ -260,13 +318,13 @@ fun UrlInputCard(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(20.dp),
-                                    color = Color.White,
+                                    color = Color(0xFF141417),
                                     strokeWidth = 2.5.dp
                                 )
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Text(
-                                    text = if (isArabic) "جارٍ استخراج الميديا..." else "Extracting via Remote Engine...",
-                                    color = Color.White,
+                                    text = if (isArabic) "جارٍ المعالجة عبر سيرفر Ubuntu..." else "Processing on Cloud Server...",
+                                    color = Color(0xFF141417),
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.Bold
                                 )
@@ -274,16 +332,16 @@ fun UrlInputCard(
                         } else {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
-                                    imageVector = Icons.Default.Download,
-                                    contentDescription = "Download",
-                                    tint = Color(0xFF0B1426),
-                                    modifier = Modifier.size(22.dp)
+                                    imageVector = Icons.Default.ElectricBolt,
+                                    contentDescription = "Start",
+                                    tint = Color(0xFF141417),
+                                    modifier = Modifier.size(20.dp)
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = if (isArabic) "استخراج وتحميل الميديا" else "Extract & Download Media",
-                                    color = Color(0xFF0B1426),
-                                    fontSize = 15.sp,
+                                    text = if (isArabic) "ابدا" else "Start",
+                                    color = Color(0xFF141417),
+                                    fontSize = 17.sp,
                                     fontWeight = FontWeight.ExtraBold
                                 )
                             }

@@ -5,17 +5,17 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-private val DarkCyberColorScheme = darkColorScheme(
-    primary = NeonCyan,
-    onPrimary = Color(0xFF03101E),
-    primaryContainer = ElectricBlue,
-    onPrimaryContainer = Color.White,
-    secondary = ElectricBlueLight,
-    onSecondary = Color.White,
-    secondaryContainer = CyberSurfaceElevated,
-    onSecondaryContainer = CyberTextPrimary,
-    tertiary = NeonCyanDim,
-    onTertiary = Color(0xFF03101E),
+private val YellowLuxuryColorScheme = darkColorScheme(
+    primary = YellowPrimary,
+    onPrimary = Color(0xFF141417),
+    primaryContainer = YellowPrimaryDark,
+    onPrimaryContainer = Color(0xFF141417),
+    secondary = ElectricBlue,
+    onSecondary = Color(0xFF141417),
+    secondaryContainer = Color(0xFF2C2A1C),
+    onSecondaryContainer = YellowAccent,
+    tertiary = YellowAccent,
+    onTertiary = Color(0xFF141417),
     background = CyberBackground,
     onBackground = CyberTextPrimary,
     surface = CyberSurface,
@@ -23,7 +23,7 @@ private val DarkCyberColorScheme = darkColorScheme(
     surfaceVariant = CyberSurfaceCard,
     onSurfaceVariant = CyberTextSecondary,
     outline = CyberBorder,
-    outlineVariant = CyberBorderGlow.copy(alpha = 0.3f),
+    outlineVariant = YellowGlow.copy(alpha = 0.35f),
     error = ErrorRed,
     onError = Color.White
 )
@@ -33,7 +33,7 @@ fun MediaDownloadTheme(
     content: @Composable () -> Unit
 ) {
     MaterialTheme(
-        colorScheme = DarkCyberColorScheme,
+        colorScheme = YellowLuxuryColorScheme,
         typography = Typography,
         content = content
     )

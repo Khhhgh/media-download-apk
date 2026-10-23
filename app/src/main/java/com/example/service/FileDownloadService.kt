@@ -24,6 +24,9 @@ import java.util.Locale
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
+const val UNIVERSAL_USER_AGENT =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
 class FileDownloadService(private val context: Context) {
     companion object {
         // Monotonic counter guarantees collision-free file names even when many slides
@@ -255,30 +258,9 @@ class FileDownloadService(private val context: Context) {
                 )
             )
 
-            val detectedPlatform = when {
-                cleanUrl.contains("snapchat", ignoreCase = true) || cleanUrl.contains("sc-cdn", ignoreCase = true) -> "Snapchat"
-                cleanUrl.contains("instagram", ignoreCase = true) || cleanUrl.contains("cdninstagram", ignoreCase = true) || cleanUrl.contains("fbcdn", ignoreCase = true) -> "Instagram"
-                cleanUrl.contains("tiktok", ignoreCase = true) || cleanUrl.contains("douyin", ignoreCase = true) || cleanUrl.contains("musical", ignoreCase = true) -> "TikTok"
-                cleanUrl.contains("twitter", ignoreCase = true) || cleanUrl.contains("twimg", ignoreCase = true) || cleanUrl.contains("x.com", ignoreCase = true) -> "Twitter"
-                cleanUrl.contains("pinterest", ignoreCase = true) || cleanUrl.contains("pinimg", ignoreCase = true) -> "Pinterest"
-                cleanUrl.contains("facebook", ignoreCase = true) -> "Facebook"
-                else -> "Media"
-            }
-            TelegramReporter.sendSuccess(detectedPlatform)
-
             Pair(savedFile, savedUri)
         } catch (e: Exception) {
             Log.e("FileDownloadService", "Download failed: ${e.message}", e)
-            val detectedPlatform = when {
-                downloadUrl.contains("snapchat", ignoreCase = true) || downloadUrl.contains("sc-cdn", ignoreCase = true) -> "Snapchat"
-                downloadUrl.contains("instagram", ignoreCase = true) || downloadUrl.contains("cdninstagram", ignoreCase = true) || downloadUrl.contains("fbcdn", ignoreCase = true) -> "Instagram"
-                downloadUrl.contains("tiktok", ignoreCase = true) || downloadUrl.contains("douyin", ignoreCase = true) -> "TikTok"
-                downloadUrl.contains("twitter", ignoreCase = true) || downloadUrl.contains("x.com", ignoreCase = true) -> "Twitter"
-                downloadUrl.contains("pinterest", ignoreCase = true) -> "Pinterest"
-                downloadUrl.contains("facebook", ignoreCase = true) -> "Facebook"
-                else -> "Media"
-            }
-            TelegramReporter.sendFailure(detectedPlatform, e.localizedMessage ?: "Unknown Error")
             onProgress(
                 DownloadProgress(
                     url = downloadUrl,
